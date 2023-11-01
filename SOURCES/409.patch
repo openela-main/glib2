@@ -1,0 +1,56 @@
+From d7233ef81e575e84d831414605ba6368394d88b5 Mon Sep 17 00:00:00 2001
+From: Colin Walters <walters@verbum.org>
+Date: Mon, 15 Oct 2018 21:50:31 +0000
+Subject: [PATCH] build-sys: Pass CFLAGS to $(DTRACE)
+
+Fedora is using https://fedoraproject.org/wiki/Changes/Annobin
+to try to ensure that all objects are built with hardening flags.
+Pass down `CFLAGS` to ensure the SystemTap objects use them.
+---
+ gio/Makefile.am     | 2 +-
+ glib/Makefile.am    | 2 +-
+ gobject/Makefile.am | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/gio/Makefile.am b/gio/Makefile.am
+index fc0b91855..05b20cdef 100644
+--- a/gio/Makefile.am
++++ b/gio/Makefile.am
+@@ -896,7 +896,7 @@ gio_probes.h: gio_probes.d
+ 		< $@.tmp > $@ && rm -f $@.tmp
+ 
+ gio_probes.lo: gio_probes.d
+-	$(AM_V_GEN) $(LIBTOOL) --mode=compile $(AM_V_lt) --tag=CC $(DTRACE) -G -s $< -o $@
++	$(AM_V_GEN) $(LIBTOOL) --mode=compile $(AM_V_lt) --tag=CC env CFLAGS="$(CFLAGS)" $(DTRACE) -G -s $< -o $@
+ 
+ BUILT_SOURCES += gio_probes.h gio_probes.lo
+ CLEANFILES += gio_probes.h gio_probes.h.tmp
+diff --git a/glib/Makefile.am b/glib/Makefile.am
+index 90d33d082..39163aa7f 100644
+--- a/glib/Makefile.am
++++ b/glib/Makefile.am
+@@ -386,7 +386,7 @@ glib_probes.h: glib_probes.d
+ 		< $@.tmp > $@ && rm -f $@.tmp
+ 
+ glib_probes.lo: glib_probes.d
+-	$(AM_V_GEN) $(LIBTOOL) --mode=compile $(AM_V_lt) --tag=CC $(DTRACE) -G -s $< -o $@
++	$(AM_V_GEN) $(LIBTOOL) --mode=compile $(AM_V_lt) --tag=CC env CFLAGS="$(CFLAGS)" $(DTRACE) -G -s $< -o $@
+ 
+ BUILT_SOURCES += glib_probes.h glib_probes.lo
+ CLEANFILES += glib_probes.h glib_probes.h.tmp
+diff --git a/gobject/Makefile.am b/gobject/Makefile.am
+index 4c28acdff..78748e96c 100644
+--- a/gobject/Makefile.am
++++ b/gobject/Makefile.am
+@@ -119,7 +119,7 @@ gobject_probes.h: gobject_probes.d
+ 		< $@.tmp > $@ && rm -f $@.tmp
+ 
+ gobject_probes.lo: gobject_probes.d
+-	$(AM_V_GEN) $(LIBTOOL) --mode=compile $(AM_V_lt) --tag=CC $(DTRACE) -G -s $< -o $@
++	$(AM_V_GEN) $(LIBTOOL) --mode=compile $(AM_V_lt) --tag=CC env CFLAGS="$(CFLAGS)" $(DTRACE) -G -s $< -o $@
+ 
+ BUILT_SOURCES += gobject_probes.h gobject_probes.lo
+ CLEANFILES += gobject_probes.h
+-- 
+2.21.0
+

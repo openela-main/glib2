@@ -1,0 +1,27 @@
+From fe803a6da0c7d73cd689d905258847384e11d1fd Mon Sep 17 00:00:00 2001
+From: Ray Strode <rstrode@redhat.com>
+Date: Mon, 17 Dec 2018 14:36:07 -0500
+Subject: [PATCH] gdbus unix addresses test: don't g_debug when also testing
+ stdout
+
+At the moment the gdbus-unix-addresses test will fail if
+G_MESSAGES_DEBUG is set, since the test checks stdout, and the
+test has a g_debug call.
+
+This commit drops the g_debug call, which isn't that useful anyway.
+---
+ gio/tests/gdbus-unix-addresses.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/gio/tests/gdbus-unix-addresses.c b/gio/tests/gdbus-unix-addresses.c
+index e08328711..d020edd06 100644
+--- a/gio/tests/gdbus-unix-addresses.c
++++ b/gio/tests/gdbus-unix-addresses.c
+@@ -106,7 +106,6 @@ set_up_mock_dbus_launch (void)
+ {
+   path = g_strconcat (g_test_get_dir (G_TEST_BUILT), ":",
+       g_getenv ("PATH"), NULL);
+-  g_debug ("PATH=%s", path);
+   g_setenv ("PATH", path, TRUE);
+ 
+   /* libdbus won't even try X11 autolaunch if DISPLAY is unset; GDBus

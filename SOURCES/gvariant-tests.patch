@@ -1,0 +1,142 @@
+From 85c4031696add9797e2334ced20678edcd96c869 Mon Sep 17 00:00:00 2001
+From: Mart Raudsepp <leio@gentoo.org>
+Date: Wed, 19 Dec 2018 16:22:21 +0200
+Subject: [PATCH 1/2] tests: Allocate gvariant data from the heap to guarantee
+ alignment
+
+On glib-2-58 branch we don't have !455, thus we need aligned data
+for the gvariant tests to not fail on i686.
+
+Fixes #1626
+---
+ glib/tests/gvariant.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/glib/tests/gvariant.c b/glib/tests/gvariant.c
+index 6e417f6c1..a7b19826d 100644
+--- a/glib/tests/gvariant.c
++++ b/glib/tests/gvariant.c
+@@ -4664,6 +4664,7 @@ test_stack_dict_init (void)
+ static void
+ test_normal_checking_tuples (void)
+ {
++  gpointer aligned_data;
+   const guint8 data[] = {
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+     'a', '(', 'a', 'o', 'a', 'o', 'a', 'a', 'o', 'a', 'a', 'o', ')'
+@@ -4672,13 +4673,15 @@ test_normal_checking_tuples (void)
+   GVariant *variant = NULL;
+   GVariant *normal_variant = NULL;
+ 
+-  variant = g_variant_new_from_data (G_VARIANT_TYPE_VARIANT, data, size,
++  aligned_data = g_memdup (data, size); /* guarantee alignment */
++  variant = g_variant_new_from_data (G_VARIANT_TYPE_VARIANT, aligned_data, size,
+                                      FALSE, NULL, NULL);
+   g_assert_nonnull (variant);
+ 
+   normal_variant = g_variant_get_normal_form (variant);
+   g_assert_nonnull (normal_variant);
+ 
++  g_free (aligned_data);
+   g_variant_unref (normal_variant);
+   g_variant_unref (variant);
+ }
+@@ -4790,6 +4793,7 @@ test_recursion_limits_array_in_variant (void)
+ static void
+ test_normal_checking_array_offsets (void)
+ {
++  gpointer aligned_data;
+   const guint8 data[] = {
+     0x07, 0xe5, 0x00, 0x07, 0x00, 0x07, 0x00, 0x00,
+     'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'g',
+@@ -4798,13 +4802,15 @@ test_normal_checking_array_offsets (void)
+   GVariant *variant = NULL;
+   GVariant *normal_variant = NULL;
+ 
+-  variant = g_variant_new_from_data (G_VARIANT_TYPE_VARIANT, data, size,
++  aligned_data = g_memdup (data, size); /* guarantee alignment */
++  variant = g_variant_new_from_data (G_VARIANT_TYPE_VARIANT, aligned_data, size,
+                                      FALSE, NULL, NULL);
+   g_assert_nonnull (variant);
+ 
+   normal_variant = g_variant_get_normal_form (variant);
+   g_assert_nonnull (normal_variant);
+ 
++  g_free (aligned_data);
+   g_variant_unref (normal_variant);
+   g_variant_unref (variant);
+ }
+@@ -4838,6 +4844,7 @@ test_normal_checking_tuple_offsets (void)
+ static void
+ test_normal_checking_empty_object_path (void)
+ {
++  gpointer aligned_data;
+   const guint8 data[] = {
+     0x20, 0x20, 0x00, 0x00, 0x00, 0x00,
+     '(', 'h', '(', 'a', 'i', 'a', 'b', 'i', 'o', ')', ')',
+@@ -4846,13 +4853,15 @@ test_normal_checking_empty_object_path (void)
+   GVariant *variant = NULL;
+   GVariant *normal_variant = NULL;
+ 
+-  variant = g_variant_new_from_data (G_VARIANT_TYPE_VARIANT, data, size,
++  aligned_data = g_memdup (data, size); /* guarantee alignment */
++  variant = g_variant_new_from_data (G_VARIANT_TYPE_VARIANT, aligned_data, size,
+                                      FALSE, NULL, NULL);
+   g_assert_nonnull (variant);
+ 
+   normal_variant = g_variant_get_normal_form (variant);
+   g_assert_nonnull (normal_variant);
+ 
++  g_free (aligned_data);
+   g_variant_unref (normal_variant);
+   g_variant_unref (variant);
+ }
+-- 
+2.19.1
+
+From 4ef58e5661849317a1110c9b93957f2c608677dd Mon Sep 17 00:00:00 2001
+From: Simon McVittie <smcv@collabora.com>
+Date: Thu, 3 Jan 2019 08:21:40 +0000
+Subject: [PATCH 2/2] gvariant test: Also force alignment for tuple test data
+
+glib!552 (commit 9eed22b3) fixed this for the tests that failed on i686,
+but this additional test failed on Debian's s390x port
+(IBM z/Architecture, 64-bit big-endian).
+
+Signed-off-by: Simon McVittie <smcv@collabora.com>
+---
+ glib/tests/gvariant.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/glib/tests/gvariant.c b/glib/tests/gvariant.c
+index a7b19826d..c4a996c1f 100644
+--- a/glib/tests/gvariant.c
++++ b/glib/tests/gvariant.c
+@@ -4820,6 +4820,7 @@ test_normal_checking_array_offsets (void)
+ static void
+ test_normal_checking_tuple_offsets (void)
+ {
++  gpointer aligned_data;
+   const guint8 data[] = {
+     0x07, 0xe5, 0x00, 0x07, 0x00, 0x07,
+     '(', 'a', 's', 'a', 's', 'a', 's', 'a', 's', 'a', 's', 'a', 's', ')',
+@@ -4828,13 +4829,15 @@ test_normal_checking_tuple_offsets (void)
+   GVariant *variant = NULL;
+   GVariant *normal_variant = NULL;
+ 
+-  variant = g_variant_new_from_data (G_VARIANT_TYPE_VARIANT, data, size,
+-                                     FALSE, NULL, NULL);
++  aligned_data = g_memdup (data, size); /* guarantee alignment */
++  variant = g_variant_new_from_data (G_VARIANT_TYPE_VARIANT, aligned_data,
++                                     size, FALSE, NULL, NULL);
+   g_assert_nonnull (variant);
+ 
+   normal_variant = g_variant_get_normal_form (variant);
+   g_assert_nonnull (normal_variant);
+ 
++  g_free (aligned_data);
+   g_variant_unref (normal_variant);
+   g_variant_unref (variant);
+ }
+-- 
+2.19.1
