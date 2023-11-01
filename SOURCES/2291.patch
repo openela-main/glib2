@@ -1,0 +1,129 @@
+From f419966808475cb6c0f0ba2f63967876218ffdaf Mon Sep 17 00:00:00 2001
+From: Julian Andres Klode <julian.klode@canonical.com>
+Date: Tue, 12 Oct 2021 12:01:50 +0200
+Subject: [PATCH 1/2] gnetworkmonitornm: Stop using removed PropertiesChanged
+ signal
+
+Use the org.freedesktop.DBus.Properties interface to listen
+to PropertiesChanged signals on /org/freedesktop/NetworkManager.
+
+NetworkManager used to provide its own legacy PropertiesChanged
+signal, but that was dropped in
+https://gitlab.freedesktop.org/NetworkManager/NetworkManager/-/merge_requests/853
+
+This requires NetworkManager >= 1.2 (2016)
+
+Fixes: #2505
+Bug-Ubuntu: https://bugs.launchpad.net/bugs/1946196
+---
+ gio/gnetworkmonitornm.c | 29 +++++++----------------------
+ 1 file changed, 7 insertions(+), 22 deletions(-)
+
+diff --git a/gio/gnetworkmonitornm.c b/gio/gnetworkmonitornm.c
+index 5a36a0ba1..6a6d1d666 100644
+--- a/gio/gnetworkmonitornm.c
++++ b/gio/gnetworkmonitornm.c
+@@ -267,29 +267,14 @@ update_cached_property (GDBusProxy   *proxy,
+ }
+ 
+ static void
+-proxy_signal_cb (GDBusProxy        *proxy,
+-                 const gchar       *sender_name,
+-                 const gchar       *signal_name,
+-                 GVariant          *parameters,
+-                 GNetworkMonitorNM *nm)
++proxy_properties_changed_cb (GDBusProxy        *proxy,
++                             GVariant          *changed_properties,
++                             GStrv              invalidated_properties,
++                             GNetworkMonitorNM *nm)
+ {
+-  GVariant *asv;
+   GVariantDict *dict;
+ 
+-  if (g_strcmp0 (signal_name, "PropertiesChanged") != 0)
+-    return;
+-
+-  g_variant_get (parameters, "(@a{sv})", &asv);
+-  if (!asv)
+-    return;
+-
+-  dict = g_variant_dict_new (asv);
+-  g_variant_unref (asv);
+-  if (!dict)
+-    {
+-      g_warning ("Failed to handle PropertiesChanged signal from NetworkManager");
+-      return;
+-    }
++  dict = g_variant_dict_new (changed_properties);
+ 
+   update_cached_property (nm->priv->proxy, "Connectivity", dict);
+ 
+@@ -361,8 +346,8 @@ g_network_monitor_nm_initable_init (GInitable     *initable,
+       return FALSE;
+     }
+ 
+-  nm->priv->signal_id = g_signal_connect (G_OBJECT (proxy), "g-signal",
+-                                          G_CALLBACK (proxy_signal_cb), nm);
++  nm->priv->signal_id = g_signal_connect (G_OBJECT (proxy), "g-properties-changed",
++                                          G_CALLBACK (proxy_properties_changed_cb), nm);
+   nm->priv->proxy = proxy;
+   sync_properties (nm, FALSE);
+ 
+-- 
+GitLab
+
+
+From 643fc7ea49e818310f6b3f6e4ebe621c7a4d6bd7 Mon Sep 17 00:00:00 2001
+From: Julian Andres Klode <julian.klode@canonical.com>
+Date: Tue, 12 Oct 2021 17:31:42 +0200
+Subject: [PATCH 2/2] gnetworkmonitornm: Do not re-update cached property
+
+GDBusProxy already takes care of updating the cached property
+before emitting the signal, so there is no need to do this
+a second time ourselves.
+---
+ gio/gnetworkmonitornm.c | 22 ----------------------
+ 1 file changed, 22 deletions(-)
+
+diff --git a/gio/gnetworkmonitornm.c b/gio/gnetworkmonitornm.c
+index 6a6d1d666..a8040fb36 100644
+--- a/gio/gnetworkmonitornm.c
++++ b/gio/gnetworkmonitornm.c
+@@ -252,34 +252,12 @@ sync_properties (GNetworkMonitorNM *nm,
+     }
+ }
+ 
+-static void
+-update_cached_property (GDBusProxy   *proxy,
+-                        const char   *property_name,
+-                        GVariantDict *dict)
+-{
+-  GVariant *v;
+-
+-  v = g_variant_dict_lookup_value (dict, property_name, NULL);
+-  if (!v)
+-    return;
+-  g_dbus_proxy_set_cached_property (proxy, property_name, v);
+-  g_variant_unref (v);
+-}
+-
+ static void
+ proxy_properties_changed_cb (GDBusProxy        *proxy,
+                              GVariant          *changed_properties,
+                              GStrv              invalidated_properties,
+                              GNetworkMonitorNM *nm)
+ {
+-  GVariantDict *dict;
+-
+-  dict = g_variant_dict_new (changed_properties);
+-
+-  update_cached_property (nm->priv->proxy, "Connectivity", dict);
+-
+-  g_variant_dict_unref (dict);
+-
+   sync_properties (nm, TRUE);
+ }
+ 
+-- 
+GitLab
+
