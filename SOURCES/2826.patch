@@ -1,0 +1,278 @@
+From 764f071909df70622e79ee71323973c18c055c8c Mon Sep 17 00:00:00 2001
+From: Giuseppe Scrivano <giuseppe@scrivano.org>
+Date: Mon, 14 Sep 2020 16:28:10 +0200
+Subject: [PATCH 1/5] gdbusauth: empty DATA does not need a trailing space
+
+This is an interoperability fix. If the line is exactly "DATA\r\n",
+the reference implementation of D-Bus treats this as equivalent to
+"DATA \r\n", meaning the data block consists of zero hex-encoded bytes.
+In practice, D-Bus clients send empty data blocks as "DATA\r\n", and
+in fact sd-bus only accepts that, rejecting "DATA \r\n".
+
+[Originally part of a larger commit; commit message added by smcv]
+
+Signed-off-by: Giuseppe Scrivano <giuseppe@scrivano.org>
+Co-authored-by: Simon McVittie <smcv@collabora.com>
+Signed-off-by: Simon McVittie <smcv@collabora.com>
+---
+ gio/gdbusauth.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/gio/gdbusauth.c b/gio/gdbusauth.c
+index ede21c8514..d2ca41a201 100644
+--- a/gio/gdbusauth.c
++++ b/gio/gdbusauth.c
+@@ -783,13 +783,13 @@ _g_dbus_auth_run_client (GDBusAuth     *auth,
+           if (line == NULL)
+             goto out;
+           debug_print ("CLIENT: WaitingForData, read='%s'", line);
+-          if (g_str_has_prefix (line, "DATA "))
++          if (g_str_equal (line, "DATA") || g_str_has_prefix (line, "DATA "))
+             {
+               gchar *encoded;
+               gchar *decoded_data;
+               gsize decoded_data_len = 0;
+ 
+-              encoded = g_strdup (line + 5);
++              encoded = g_strdup (line + 4);
+               g_free (line);
+               g_strstrip (encoded);
+               decoded_data = hexdecode (encoded, &decoded_data_len, error);
+@@ -1255,13 +1255,13 @@ _g_dbus_auth_run_server (GDBusAuth              *auth,
+           debug_print ("SERVER: WaitingForData, read '%s'", line);
+           if (line == NULL)
+             goto out;
+-          if (g_str_has_prefix (line, "DATA "))
++          if (g_str_equal (line, "DATA") || g_str_has_prefix (line, "DATA "))
+             {
+               gchar *encoded;
+               gchar *decoded_data;
+               gsize decoded_data_len = 0;
+ 
+-              encoded = g_strdup (line + 5);
++              encoded = g_strdup (line + 4);
+               g_free (line);
+               g_strstrip (encoded);
+               decoded_data = hexdecode (encoded, &decoded_data_len, error);
+-- 
+GitLab
+
+
+From a7d2e727eefcf883bb463ad559f5632e8e448757 Mon Sep 17 00:00:00 2001
+From: Giuseppe Scrivano <giuseppe@scrivano.org>
+Date: Mon, 14 Sep 2020 16:28:10 +0200
+Subject: [PATCH 2/5] GDBusServer: If no initial response for EXTERNAL, send a
+ challenge
+
+Sending an "initial response" along with the AUTH command is meant
+to be an optional optimization, and clients are allowed to omit it.
+We must reply with our initial challenge, which in the case of EXTERNAL
+is an empty string: the client responds to that with the authorization
+identity.
+
+If we do not reply to the AUTH command, then the client will wait
+forever for our reply, while we wait forever for the reply that we
+expect the client to send, resulting in deadlock.
+
+D-Bus does not have a way to distinguish between an empty initial
+response and the absence of an initial response, so clients that want
+to use an empty authorization identity, such as systed's sd-bus,
+cannot use the initial-response optimization and will fail to connect
+to a GDBusServer that does not have this change.
+
+[Originally part of a larger commit; commit message added by smcv.]
+
+Signed-off-by: Simon McVittie <smcv@collabora.com>
+---
+ gio/gdbusauthmechanismexternal.c | 23 ++++++++++++++++++-----
+ 1 file changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/gio/gdbusauthmechanismexternal.c b/gio/gdbusauthmechanismexternal.c
+index 617fe1d0e5..ddd06cbd5e 100644
+--- a/gio/gdbusauthmechanismexternal.c
++++ b/gio/gdbusauthmechanismexternal.c
+@@ -40,6 +40,7 @@ struct _GDBusAuthMechanismExternalPrivate
+   gboolean is_client;
+   gboolean is_server;
+   GDBusAuthMechanismState state;
++  gboolean empty_data_sent;
+ };
+ 
+ static gint                     mechanism_get_priority              (void);
+@@ -253,7 +254,9 @@ mechanism_server_initiate (GDBusAuthMechanism   *mechanism,
+     }
+   else
+     {
+-      m->priv->state = G_DBUS_AUTH_MECHANISM_STATE_WAITING_FOR_DATA;
++      /* The initial-response optimization was not used, so we need to
++       * send an empty challenge to prompt the client to respond. */
++      m->priv->state = G_DBUS_AUTH_MECHANISM_STATE_HAVE_DATA_TO_SEND;
+     }
+ }
+ 
+@@ -288,12 +291,22 @@ mechanism_server_data_send (GDBusAuthMechanism   *mechanism,
+ 
+   g_return_val_if_fail (G_IS_DBUS_AUTH_MECHANISM_EXTERNAL (mechanism), NULL);
+   g_return_val_if_fail (m->priv->is_server && !m->priv->is_client, NULL);
+-  g_return_val_if_fail (m->priv->state == G_DBUS_AUTH_MECHANISM_STATE_HAVE_DATA_TO_SEND, NULL);
+ 
+-  /* can never end up here because we are never in the HAVE_DATA_TO_SEND state */
+-  g_assert_not_reached ();
++  if (out_data_len)
++    *out_data_len = 0;
+ 
+-  return NULL;
++  if (m->priv->empty_data_sent)
++    {
++      /* We have already sent an empty data response.
++         Reject the connection.  */
++      m->priv->state = G_DBUS_AUTH_MECHANISM_STATE_REJECTED;
++      return NULL;
++    }
++
++  m->priv->state = G_DBUS_AUTH_MECHANISM_STATE_WAITING_FOR_DATA;
++  m->priv->empty_data_sent = TRUE;
++
++  return g_strdup ("");
+ }
+ 
+ static gchar *
+-- 
+GitLab
+
+
+From b51e3ab09e39c590c65a7be6228ecfa48a6189f6 Mon Sep 17 00:00:00 2001
+From: Giuseppe Scrivano <giuseppe@scrivano.org>
+Date: Mon, 14 Sep 2020 16:28:10 +0200
+Subject: [PATCH 3/5] GDBusServer: Accept empty authorization identity for
+ EXTERNAL mechanism
+
+RFC 4422 appendix A defines the empty authorization identity to mean
+the identity that the server associated with its authentication
+credentials. In this case, this means whatever uid is in the
+GCredentials object.
+
+In particular, this means that clients in a different Linux user
+namespace can authenticate against our server and will be authorized
+as the version of their uid that is visible in the server's namespace,
+even if the corresponding numeric uid returned by geteuid() in the
+client's namespace was different. systemd's sd-bus has relied on this
+since commit
+https://github.com/systemd/systemd/commit/1ed4723d38cd0d1423c8fe650f90fa86007ddf55.
+
+[Originally part of a larger commit; commit message added by smcv]
+
+Signed-off-by: Simon McVittie <smcv@collabora.com>
+---
+ gio/gdbusauthmechanismexternal.c | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/gio/gdbusauthmechanismexternal.c b/gio/gdbusauthmechanismexternal.c
+index ddd06cbd5e..a465862d12 100644
+--- a/gio/gdbusauthmechanismexternal.c
++++ b/gio/gdbusauthmechanismexternal.c
+@@ -201,14 +201,24 @@ data_matches_credentials (const gchar  *data,
+   if (credentials == NULL)
+     goto out;
+ 
+-  if (data == NULL || data_len == 0)
+-    goto out;
+-
+ #if defined(G_OS_UNIX)
+   {
+     gint64 alleged_uid;
+     gchar *endp;
+ 
++    /* If we were unable to find out the uid, then nothing
++     * can possibly match it.  */
++    if (g_credentials_get_unix_user (credentials, NULL) == (uid_t) -1)
++      goto out;
++
++    /* An empty authorization identity means we want to be
++     * whatever identity the out-of-band credentials say we have
++     * (RFC 4422 appendix A.1). This effectively matches any uid. */
++    if (data == NULL || data_len == 0)
++      {
++        match = TRUE;
++        goto out;
++      }
+     /* on UNIX, this is the uid as a string in base 10 */
+     alleged_uid = g_ascii_strtoll (data, &endp, 10);
+     if (*endp == '\0')
+-- 
+GitLab
+
+
+From 3f532af65c98e4ba8426c53f26c9ee15d3692f9c Mon Sep 17 00:00:00 2001
+From: Simon McVittie <smcv@collabora.com>
+Date: Mon, 18 Jul 2022 17:14:44 +0100
+Subject: [PATCH 4/5] gdbusauth: Represent empty data block as DATA\r\n, with
+ no space
+
+This is an interoperability fix. The reference implementation of D-Bus
+treats "DATA\r\n" as equivalent to "DATA \r\n", but sd-bus does not,
+and only accepts the former.
+
+Signed-off-by: Simon McVittie <smcv@collabora.com>
+---
+ gio/gdbusauth.c | 34 ++++++++++++++++++++++++++--------
+ 1 file changed, 26 insertions(+), 8 deletions(-)
+
+diff --git a/gio/gdbusauth.c b/gio/gdbusauth.c
+index d2ca41a201..89cbbf67c6 100644
+--- a/gio/gdbusauth.c
++++ b/gio/gdbusauth.c
+@@ -807,11 +807,21 @@ _g_dbus_auth_run_client (GDBusAuth     *auth,
+                 {
+                   gchar *data;
+                   gsize data_len;
+-                  gchar *encoded_data;
++
+                   data = _g_dbus_auth_mechanism_client_data_send (mech, &data_len);
+-                  encoded_data = _g_dbus_hexencode (data, data_len);
+-                  s = g_strdup_printf ("DATA %s\r\n", encoded_data);
+-                  g_free (encoded_data);
++
++                  if (data_len == 0)
++                    {
++                      s = g_strdup ("DATA\r\n");
++                    }
++                  else
++                    {
++                      gchar *encoded_data = _g_dbus_hexencode (data, data_len);
++
++                      s = g_strdup_printf ("DATA %s\r\n", encoded_data);
++                      g_free (encoded_data);
++                    }
++
+                   g_free (data);
+                   debug_print ("CLIENT: writing '%s'", s);
+                   if (!g_data_output_stream_put_string (dos, s, cancellable, error))
+@@ -1209,13 +1219,21 @@ _g_dbus_auth_run_server (GDBusAuth              *auth,
+                         gsize data_len;
+ 
+                         data = _g_dbus_auth_mechanism_server_data_send (mech, &data_len);
++
+                         if (data != NULL)
+                           {
+-                            gchar *encoded_data;
++                            if (data_len == 0)
++                              {
++                                s = g_strdup ("DATA\r\n");
++                              }
++                            else
++                              {
++                                gchar *encoded_data = _g_dbus_hexencode (data, data_len);
++
++                                s = g_strdup_printf ("DATA %s\r\n", encoded_data);
++                                g_free (encoded_data);
++                              }
+ 
+-                            encoded_data = _g_dbus_hexencode (data, data_len);
+-                            s = g_strdup_printf ("DATA %s\r\n", encoded_data);
+-                            g_free (encoded_data);
+                             g_free (data);
+ 
+                             debug_print ("SERVER: writing '%s'", s);
+-- 
+GitLab

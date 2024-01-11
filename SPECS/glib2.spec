@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 6%{?dist}
+Release: 11%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -10,26 +10,38 @@ Source0: http://download.gnome.org/sources/glib/2.68/glib-%{version}.tar.xz
 # Required for RHEL core crypto components policy. Good for Fedora too.
 # https://bugzilla.redhat.com/show_bug.cgi?id=1630260
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/903
-Patch0: gnutls-hmac.patch
+Patch: gnutls-hmac.patch
 
 # Add GPowerProfileMonitor
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/1965
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2194
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2222
-Patch1: 1965.patch
-Patch2: 2194.patch
-Patch3: 2222.patch
+Patch: 1965.patch
+Patch: 2194.patch
+Patch: 2222.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2244
-Patch4: 2244.patch
+Patch: 2244.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2291
-Patch5: 2291.patch
+Patch: 2291.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/1968
-Patch6: 1968.patch
+Patch: 1968.patch
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2435
-Patch7: 2435.patch
+Patch: 2435.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3126
+Patch: 3126.patch
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3136
+Patch: 3136.patch
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3163
+Patch: 3163.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2826
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3272
+Patch: 2826.patch
+Patch: 3272.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -77,7 +89,6 @@ GLib is the low-level core library that forms the basis for projects
 such as GTK+ and GNOME. It provides data structure handling for C,
 portability wrappers, and interfaces for such runtime functionality
 as an event loop, threads, dynamic loading, and an object system.
-
 
 %package devel
 Summary: A library of handy utility functions
@@ -247,6 +258,29 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Wed Jul 19 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-11
+- Really fix authentication failures when sd-bus clients connect to GDBus servers
+- Resolves: #2217771
+
+* Thu Jul 06 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-10
+- Fix authentication failures when sd-bus clients connect to GDBus servers
+- Resolves: #2217771
+
+* Thu May 25 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-9
+- Resolve s390x crashes introduced by fixes for CVE-2023-24593/CVE-2023-25180
+- Related: #2181196
+- Related: #2181200
+
+* Wed May 17 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-8
+- Resolve use after free introduced by fixes for CVE-2023-24593/CVE-2023-25180
+- Related: #2181196
+- Related: #2181200
+
+* Fri Mar 24 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-7
+- Fix CVE-2023-24593 and CVE-2023-25180
+- Resolves: #2181196
+- Resolves: #2181200
+
 * Fri Dec 02 2022 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-6
 - Drop gdesktopappinfo patchset
 - Resolves: #2150307
