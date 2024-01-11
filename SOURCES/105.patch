@@ -1,0 +1,658 @@
+From 5634fd61f17d28dfc05cd47cfbd2bd2f21e6d2b1 Mon Sep 17 00:00:00 2001
+From: Allison Lortie <desrt@desrt.ca>
+Date: Wed, 2 Aug 2017 11:06:03 +0100
+Subject: [PATCH 1/4] gsettings: cleanup default value lookup
+
+There are a couple of different ways (and soon one more) to access the
+default value of a key. Clean up the various places that access this to
+avoid duplication.
+
+https://bugzilla.gnome.org/show_bug.cgi?id=746592
+---
+ gio/gsettings.c | 20 ++++----------------
+ 1 file changed, 4 insertions(+), 16 deletions(-)
+
+diff --git a/gio/gsettings.c b/gio/gsettings.c
+index 10d394d69..5e5816d57 100644
+--- a/gio/gsettings.c
++++ b/gio/gsettings.c
+@@ -1204,10 +1204,7 @@ g_settings_get_value (GSettings   *settings,
+   value = g_settings_read_from_backend (settings, &skey, FALSE, FALSE);
+ 
+   if (value == NULL)
+-    value = g_settings_schema_key_get_translated_default (&skey);
+-
+-  if (value == NULL)
+-    value = g_variant_ref (skey.default_value);
++    value = g_settings_schema_key_get_default_value (&skey);
+ 
+   g_settings_schema_key_clear (&skey);
+ 
+@@ -1304,10 +1301,7 @@ g_settings_get_default_value (GSettings   *settings,
+   value = g_settings_read_from_backend (settings, &skey, FALSE, TRUE);
+ 
+   if (value == NULL)
+-    value = g_settings_schema_key_get_translated_default (&skey);
+-
+-  if (value == NULL)
+-    value = g_variant_ref (skey.default_value);
++    value = g_settings_schema_key_get_default_value (&skey);
+ 
+   g_settings_schema_key_clear (&skey);
+ 
+@@ -1360,10 +1354,7 @@ g_settings_get_enum (GSettings   *settings,
+   value = g_settings_read_from_backend (settings, &skey, FALSE, FALSE);
+ 
+   if (value == NULL)
+-    value = g_settings_schema_key_get_translated_default (&skey);
+-
+-  if (value == NULL)
+-    value = g_variant_ref (skey.default_value);
++    value = g_settings_schema_key_get_default_value (&skey);
+ 
+   result = g_settings_schema_key_to_enum (&skey, value);
+   g_settings_schema_key_clear (&skey);
+@@ -1473,10 +1464,7 @@ g_settings_get_flags (GSettings   *settings,
+   value = g_settings_read_from_backend (settings, &skey, FALSE, FALSE);
+ 
+   if (value == NULL)
+-    value = g_settings_schema_key_get_translated_default (&skey);
+-
+-  if (value == NULL)
+-    value = g_variant_ref (skey.default_value);
++    value = g_settings_schema_key_get_default_value (&skey);
+ 
+   result = g_settings_schema_key_to_flags (&skey, value);
+   g_settings_schema_key_clear (&skey);
+-- 
+2.21.0
+
+
+From 89c6e8f4a0bcda4b58dbaea713e62be01cfc2087 Mon Sep 17 00:00:00 2001
+From: Allison Lortie <desrt@desrt.ca>
+Date: Wed, 2 Aug 2017 11:08:17 +0100
+Subject: [PATCH 2/4] gsettingsschema: Allow per-desktop overrides
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Recognise a new 'd' option in schema keys which gives a dictionary of
+per-desktop default values. This dictionary is searched for the items
+found in XDG_CURRENT_DESKTOP, in the order. If nothing matches (or if
+the option is missing) then the default value is used as before.
+
+This feature was requested by Alberts Muktupāvels and this patch is
+based on an approach devised by them.
+
+https://bugzilla.gnome.org/show_bug.cgi?id=746592
+---
+ gio/gsettings.c                | 21 +++++++++++++++++
+ gio/gsettingsschema-internal.h |  2 ++
+ gio/gsettingsschema.c          | 41 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 64 insertions(+)
+
+diff --git a/gio/gsettings.c b/gio/gsettings.c
+index 5e5816d57..f1130c095 100644
+--- a/gio/gsettings.c
++++ b/gio/gsettings.c
+@@ -1739,6 +1739,13 @@ g_settings_get_mapped (GSettings           *settings,
+       if (okay) goto okay;
+     }
+ 
++  if ((value = g_settings_schema_key_get_per_desktop_default (&skey)))
++    {
++      okay = mapping (value, &result, user_data);
++      g_variant_unref (value);
++      if (okay) goto okay;
++    }
++
+   if (mapping (skey.default_value, &result, user_data))
+     goto okay;
+ 
+@@ -2647,6 +2654,20 @@ g_settings_binding_key_changed (GSettings   *settings,
+         }
+     }
+ 
++  if (variant == NULL)
++    {
++      variant = g_settings_schema_key_get_per_desktop_default (&binding->key);
++      if (variant &&
++          !binding->get_mapping (&value, variant, binding->user_data))
++        {
++          g_error ("Per-desktop default value for key '%s' in schema '%s' "
++                   "was rejected by the binding mapping function.",
++                   binding->key.name, g_settings_schema_get_id (binding->key.schema));
++          g_variant_unref (variant);
++          variant = NULL;
++        }
++    }
++
+   if (variant == NULL)
+     {
+       variant = g_variant_ref (binding->key.default_value);
+diff --git a/gio/gsettingsschema-internal.h b/gio/gsettingsschema-internal.h
+index f54de3b34..5f996b4bc 100644
+--- a/gio/gsettingsschema-internal.h
++++ b/gio/gsettingsschema-internal.h
+@@ -37,6 +37,7 @@ struct _GSettingsSchemaKey
+   const GVariantType *type;
+   GVariant *minimum, *maximum;
+   GVariant *default_value;
++  GVariant *desktop_overrides;
+ 
+   gint ref_count;
+ };
+@@ -58,6 +59,7 @@ gboolean                g_settings_schema_key_type_check                (GSettin
+ GVariant *              g_settings_schema_key_range_fixup               (GSettingsSchemaKey *key,
+                                                                          GVariant           *value);
+ GVariant *              g_settings_schema_key_get_translated_default    (GSettingsSchemaKey *key);
++GVariant *              g_settings_schema_key_get_per_desktop_default   (GSettingsSchemaKey *key);
+ 
+ gint                    g_settings_schema_key_to_enum                   (GSettingsSchemaKey *key,
+                                                                          GVariant           *value);
+diff --git a/gio/gsettingsschema.c b/gio/gsettingsschema.c
+index f1274a369..17b7e3b01 100644
+--- a/gio/gsettingsschema.c
++++ b/gio/gsettingsschema.c
+@@ -27,6 +27,7 @@
+ #include <glibintl.h>
+ #include <locale.h>
+ #include <string.h>
++#include <stdlib.h>
+ 
+ /**
+  * SECTION:gsettingsschema
+@@ -1283,6 +1284,11 @@ g_settings_schema_key_init (GSettingsSchemaKey *key,
+           endian_fixup (&key->maximum);
+           break;
+ 
++        case 'd':
++          g_variant_get (data, "@a{sv}", &key->desktop_overrides);
++          endian_fixup (&key->desktop_overrides);
++          break;
++
+         default:
+           g_warning ("unknown schema extension '%c'", code);
+           break;
+@@ -1303,6 +1309,9 @@ g_settings_schema_key_clear (GSettingsSchemaKey *key)
+   if (key->maximum)
+     g_variant_unref (key->maximum);
+ 
++  if (key->desktop_overrides)
++    g_variant_unref (key->desktop_overrides);
++
+   g_variant_unref (key->default_value);
+ 
+   g_settings_schema_unref (key->schema);
+@@ -1410,6 +1419,35 @@ g_settings_schema_key_get_translated_default (GSettingsSchemaKey *key)
+   return value;
+ }
+ 
++GVariant *
++g_settings_schema_key_get_per_desktop_default (GSettingsSchemaKey *key)
++{
++  static const gchar * const *current_desktops;
++  GVariant *value = NULL;
++  gint i;
++
++  if (!key->desktop_overrides)
++    return NULL;
++
++  if (g_once_init_enter (&current_desktops))
++    {
++      const gchar *xdg_current_desktop = g_getenv ("XDG_CURRENT_DESKTOP");
++      gchar **tmp;
++
++      if (xdg_current_desktop != NULL && xdg_current_desktop[0] != '\0')
++        tmp = g_strsplit (xdg_current_desktop, G_SEARCHPATH_SEPARATOR_S, -1);
++      else
++        tmp = g_new0 (gchar *, 0 + 1);
++
++      g_once_init_leave (&current_desktops, (const gchar **) tmp);
++    }
++
++  for (i = 0; value == NULL && current_desktops[i] != NULL; i++)
++    value = g_variant_lookup_value (key->desktop_overrides, current_desktops[i], NULL);
++
++  return value;
++}
++
+ gint
+ g_settings_schema_key_to_enum (GSettingsSchemaKey *key,
+                                GVariant           *value)
+@@ -1698,6 +1736,9 @@ g_settings_schema_key_get_default_value (GSettingsSchemaKey *key)
+ 
+   value = g_settings_schema_key_get_translated_default (key);
+ 
++  if (!value)
++    value = g_settings_schema_key_get_per_desktop_default (key);
++
+   if (!value)
+     value = g_variant_ref (key->default_value);
+ 
+-- 
+2.21.0
+
+
+From 3710e830de015829c086c69181a8703645d577ec Mon Sep 17 00:00:00 2001
+From: Allison Lortie <desrt@desrt.ca>
+Date: Wed, 2 Aug 2017 11:10:18 +0100
+Subject: [PATCH 3/4] glib-compile-schemas: Handle per-desktop overrides
+
+Add a new syntax to override files: if the group name has a ':' in it,
+it indicates that we want to override the default values of keys for
+only one desktop. For example:
+
+[org.gnome.desktop.interface:Unity]
+font-name='Ubuntu 12'
+
+Will override the settings, only if "Unity" is found in
+XDG_CURRENT_DESKTOP. Multiple per-desktop overrides can be specified
+for a given key: the one which comes first in XDG_CURRENT_DESKTOP will
+be used.
+
+https://bugzilla.gnome.org/show_bug.cgi?id=746592
+---
+ gio/glib-compile-schemas.c | 83 ++++++++++++++++++++++++++++++++++----
+ 1 file changed, 75 insertions(+), 8 deletions(-)
+
+diff --git a/gio/glib-compile-schemas.c b/gio/glib-compile-schemas.c
+index 2dc8c7171..59fb68ee7 100644
+--- a/gio/glib-compile-schemas.c
++++ b/gio/glib-compile-schemas.c
+@@ -179,6 +179,8 @@ typedef struct
+   GString      *unparsed_default_value;
+   GVariant     *default_value;
+ 
++  GVariantDict *desktop_overrides;
++
+   GString      *strinfo;
+   gboolean      is_enum;
+   gboolean      is_flags;
+@@ -731,6 +733,11 @@ key_state_serialise (KeyState *state)
+             g_variant_builder_add (&builder, "(y(**))", 'r',
+                                    state->minimum, state->maximum);
+ 
++          /* per-desktop overrides */
++          if (state->desktop_overrides)
++            g_variant_builder_add (&builder, "(y@a{sv})", 'd',
++                                   g_variant_dict_end (state->desktop_overrides));
++
+           state->serialised = g_variant_builder_end (&builder);
+         }
+ 
+@@ -768,6 +775,9 @@ key_state_free (gpointer data)
+   if (state->serialised)
+     g_variant_unref (state->serialised);
+ 
++  if (state->desktop_overrides)
++    g_variant_dict_unref (state->desktop_overrides);
++
+   g_slice_free (KeyState, state);
+ }
+ 
+@@ -1878,6 +1888,8 @@ set_overrides (GHashTable  *schema_table,
+       gchar **groups;
+       gint i;
+ 
++      g_debug ("Processing override file '%s'", filename);
++
+       key_file = g_key_file_new ();
+       if (!g_key_file_load_from_file (key_file, filename, 0, &error))
+         {
+@@ -1900,18 +1912,31 @@ set_overrides (GHashTable  *schema_table,
+       for (i = 0; groups[i]; i++)
+         {
+           const gchar *group = groups[i];
++          const gchar *schema_name;
++          const gchar *desktop_id;
+           SchemaState *schema;
++          gchar **pieces;
+           gchar **keys;
+           gint j;
+ 
+-          schema = g_hash_table_lookup (schema_table, group);
++          pieces = g_strsplit (group, ":", 2);
++          schema_name = pieces[0];
++          desktop_id = pieces[1];
++
++          g_debug ("Processing group '%s' (schema '%s', %s)",
++                   group, schema_name, desktop_id ? desktop_id : "all desktops");
++
++          schema = g_hash_table_lookup (schema_table, schema_name);
+ 
+           if (schema == NULL)
+-            /* Having the schema not be installed is expected to be a
+-             * common case.  Don't even emit an error message about
+-             * that.
+-             */
+-            continue;
++            {
++              /* Having the schema not be installed is expected to be a
++               * common case.  Don't even emit an error message about
++               * that.
++               */
++              g_strfreev (pieces);
++              continue;
++            }
+ 
+           keys = g_key_file_get_keys (key_file, group, NULL, NULL);
+           g_assert (keys != NULL);
+@@ -1939,6 +1964,32 @@ set_overrides (GHashTable  *schema_table,
+ 
+                   fprintf (stderr, _(" and --strict was specified; exiting.\n"));
+                   g_key_file_free (key_file);
++                  g_strfreev (pieces);
++                  g_strfreev (groups);
++                  g_strfreev (keys);
++
++                  return FALSE;
++                }
++
++              if (desktop_id != NULL && state->l10n)
++                {
++                  /* Let's avoid the n*m case of per-desktop localised
++                   * default values, and just forbid it.
++                   */
++                  fprintf (stderr,
++                           _("cannot provide per-desktop overrides for localised "
++                             "key '%s' in schema '%s' (override file '%s')"),
++                           key, group, filename);
++
++                  if (!strict)
++                    {
++                      fprintf (stderr, _("; ignoring override for this key.\n"));
++                      continue;
++                    }
++
++                  fprintf (stderr, _(" and --strict was specified; exiting.\n"));
++                  g_key_file_free (key_file);
++                  g_strfreev (pieces);
+                   g_strfreev (groups);
+                   g_strfreev (keys);
+ 
+@@ -1969,6 +2020,7 @@ set_overrides (GHashTable  *schema_table,
+ 
+                   fprintf (stderr, _("--strict was specified; exiting.\n"));
+                   g_key_file_free (key_file);
++                  g_strfreev (pieces);
+                   g_strfreev (groups);
+                   g_strfreev (keys);
+ 
+@@ -1997,6 +2049,7 @@ set_overrides (GHashTable  *schema_table,
+ 
+                       fprintf (stderr, _(" and --strict was specified; exiting.\n"));
+                       g_key_file_free (key_file);
++                      g_strfreev (pieces);
+                       g_strfreev (groups);
+                       g_strfreev (keys);
+ 
+@@ -2025,6 +2078,7 @@ set_overrides (GHashTable  *schema_table,
+ 
+                       fprintf (stderr, _(" and --strict was specified; exiting.\n"));
+                       g_key_file_free (key_file);
++                      g_strfreev (pieces);
+                       g_strfreev (groups);
+                       g_strfreev (keys);
+ 
+@@ -2032,11 +2086,24 @@ set_overrides (GHashTable  *schema_table,
+                     }
+                 }
+ 
+-              g_variant_unref (state->default_value);
+-              state->default_value = value;
++              if (desktop_id != NULL)
++                {
++                  if (state->desktop_overrides == NULL)
++                    state->desktop_overrides = g_variant_dict_new (NULL);
++
++                  g_variant_dict_insert_value (state->desktop_overrides, desktop_id, value);
++                  g_variant_unref (value);
++                }
++              else
++                {
++                  g_variant_unref (state->default_value);
++                  state->default_value = value;
++                }
++
+               g_free (string);
+             }
+ 
++          g_strfreev (pieces);
+           g_strfreev (keys);
+         }
+ 
+-- 
+2.21.0
+
+
+From 2ca9218fb46f32fa02bed43c6e60243c8c5d656f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alberts=20Muktup=C4=81vels?= <alberts.muktupavels@gmail.com>
+Date: Tue, 19 Jun 2018 23:39:24 +0300
+Subject: [PATCH 4/4] Add a test for per-desktop overrides
+
+---
+ gio/glib-compile-schemas.c                   |   1 +
+ gio/tests/Makefile.am                        |   2 +
+ gio/tests/gsettings.c                        | 106 ++++++++++++++++++-
+ gio/tests/org.gtk.test.gschema.override.orig |   2 +
+ gio/tests/org.gtk.test.gschema.xml.orig      |   6 ++
+ 5 files changed, 116 insertions(+), 1 deletion(-)
+ create mode 100644 gio/tests/org.gtk.test.gschema.override.orig
+
+diff --git a/gio/glib-compile-schemas.c b/gio/glib-compile-schemas.c
+index 59fb68ee7..00dd64146 100644
+--- a/gio/glib-compile-schemas.c
++++ b/gio/glib-compile-schemas.c
+@@ -2139,6 +2139,7 @@ main (int argc, char **argv)
+ 
+     /* These options are only for use in the gschema-compile tests */
+     { "schema-file", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_FILENAME_ARRAY, &schema_files, NULL, NULL },
++    { "override-file", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_FILENAME_ARRAY, &override_files, NULL, NULL },
+     { NULL }
+   };
+ 
+diff --git a/gio/tests/Makefile.am b/gio/tests/Makefile.am
+index 49a19bf4a..b41317ad9 100644
+--- a/gio/tests/Makefile.am
++++ b/gio/tests/Makefile.am
+@@ -367,12 +367,14 @@ test.mo: de.po
+ EXTRA_DIST += de.po
+ dist_uninstalled_test_data += \
+ 	org.gtk.test.gschema.xml.orig		\
++	org.gtk.test.gschema.override.orig	\
+ 	org.gtk.schemasourcecheck.gschema.xml	\
+ 	testenum.h				\
+ 	enums.xml.template
+ # Generated while running the testcase itself...
+ CLEANFILES += \
+ 	org.gtk.test.gschema.xml	\
++	org.gtk.test.gschema.override	\
+ 	org.gtk.test.enums.xml		\
+ 	gsettings.store			\
+ 	gschemas.compiled		\
+diff --git a/gio/tests/gsettings.c b/gio/tests/gsettings.c
+index 2be4122fe..acdeead4c 100644
+--- a/gio/tests/gsettings.c
++++ b/gio/tests/gsettings.c
+@@ -2192,6 +2192,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
+                             "org.gtk.test.range.direct",
+                             "org.gtk.test.mapped",
+                             "org.gtk.test.descriptions",
++                            "org.gtk.test.per-desktop",
+                             NULL));
+ }
+ 
+@@ -2583,6 +2584,100 @@ test_default_value (void)
+   g_object_unref (settings);
+ }
+ 
++static gboolean
++string_map_func (GVariant *value,
++                 gpointer *result,
++                 gpointer  user_data)
++{
++  const gchar *str;
++
++  str = g_variant_get_string (value, NULL);
++  *result = g_variant_new_string (str);
++
++  return TRUE;
++}
++
++/* Test that per-desktop values from org.gtk.test.gschema.override
++ * does not change default value if current desktop is not listed in
++ * $XDG_CURRENT_DESKTOP.
++ */
++static void
++test_per_desktop (void)
++{
++  GSettings *settings;
++  TestObject *obj;
++  gpointer p;
++  gchar *str;
++
++  settings = g_settings_new ("org.gtk.test.per-desktop");
++  obj = test_object_new ();
++
++  if (!g_test_subprocess ())
++    {
++      g_test_trap_subprocess ("/gsettings/per-desktop/subprocess", 0, 0);
++      g_test_trap_assert_passed ();
++    }
++
++  str = g_settings_get_string (settings, "desktop");
++  g_assert_cmpstr (str, ==, "GNOME");
++  g_free (str);
++
++  p = g_settings_get_mapped (settings, "desktop", string_map_func, NULL);
++
++  str = g_variant_dup_string (p, NULL);
++  g_assert_cmpstr (str, ==, "GNOME");
++  g_free (str);
++
++  g_variant_unref (p);
++
++  g_settings_bind (settings, "desktop", obj, "string", G_SETTINGS_BIND_DEFAULT);
++
++  g_object_get (obj, "string", &str, NULL);
++  g_assert_cmpstr (str, ==, "GNOME");
++  g_free (str);
++
++  g_object_unref (settings);
++  g_object_unref (obj);
++}
++
++/* Test that per-desktop values from org.gtk.test.gschema.override
++ * are successfully loaded based on the value of $XDG_CURRENT_DESKTOP.
++ */
++static void
++test_per_desktop_subprocess (void)
++{
++  GSettings *settings;
++  TestObject *obj;
++  gpointer p;
++  gchar *str;
++
++  g_setenv ("XDG_CURRENT_DESKTOP", "GNOME-Classic:GNOME", TRUE);
++
++  settings = g_settings_new ("org.gtk.test.per-desktop");
++  obj = test_object_new ();
++
++  str = g_settings_get_string (settings, "desktop");
++  g_assert_cmpstr (str, ==, "GNOME Classic");
++  g_free (str);
++
++  p = g_settings_get_mapped (settings, "desktop", string_map_func, NULL);
++
++  str = g_variant_dup_string (p, NULL);
++  g_assert_cmpstr (str, ==, "GNOME Classic");
++  g_free (str);
++
++  g_variant_unref (p);
++
++  g_settings_bind (settings, "desktop", obj, "string", G_SETTINGS_BIND_DEFAULT);
++
++  g_object_get (obj, "string", &str, NULL);
++  g_assert_cmpstr (str, ==, "GNOME Classic");
++  g_free (str);
++
++  g_object_unref (settings);
++  g_object_unref (obj);
++}
++
+ static void
+ test_extended_schema (void)
+ {
+@@ -2603,6 +2698,7 @@ int
+ main (int argc, char *argv[])
+ {
+   gchar *schema_text;
++  gchar *override_text;
+   gchar *enums;
+   gint result;
+ 
+@@ -2625,6 +2721,7 @@ main (int argc, char *argv[])
+       g_setenv ("XDG_DATA_DIRS", ".", TRUE);
+       g_setenv ("XDG_DATA_HOME", ".", TRUE);
+       g_setenv ("GSETTINGS_SCHEMA_DIR", ".", TRUE);
++      g_setenv ("XDG_CURRENT_DESKTOP", "", TRUE);
+ 
+       if (!backend_set)
+         g_setenv ("GSETTINGS_BACKEND", "memory", TRUE);
+@@ -2647,6 +2744,10 @@ main (int argc, char *argv[])
+       g_assert (g_file_set_contents ("org.gtk.test.gschema.xml", schema_text, -1, NULL));
+       g_free (schema_text);
+ 
++      g_assert (g_file_get_contents (SRCDIR "/org.gtk.test.gschema.override.orig", &override_text, NULL, NULL));
++      g_assert (g_file_set_contents ("org.gtk.test.gschema.override", override_text, -1, NULL));
++      g_free (override_text);
++
+ /* Meson build defines this, autotools build does not */
+ #ifndef GLIB_COMPILE_SCHEMAS
+ #define GLIB_COMPILE_SCHEMAS "../glib-compile-schemas"
+@@ -2655,7 +2756,8 @@ main (int argc, char *argv[])
+       g_remove ("gschemas.compiled");
+       g_assert (g_spawn_command_line_sync (GLIB_COMPILE_SCHEMAS " --targetdir=. "
+                                            "--schema-file=org.gtk.test.enums.xml "
+-                                           "--schema-file=org.gtk.test.gschema.xml",
++                                           "--schema-file=org.gtk.test.gschema.xml "
++                                           "--override-file=org.gtk.test.gschema.override",
+                                            NULL, NULL, &result, NULL));
+       g_assert (result == 0);
+ 
+@@ -2736,6 +2838,8 @@ main (int argc, char *argv[])
+   g_test_add_func ("/gsettings/read-descriptions", test_read_descriptions);
+   g_test_add_func ("/gsettings/test-extended-schema", test_extended_schema);
+   g_test_add_func ("/gsettings/default-value", test_default_value);
++  g_test_add_func ("/gsettings/per-desktop", test_per_desktop);
++  g_test_add_func ("/gsettings/per-desktop/subprocess", test_per_desktop_subprocess);
+ 
+   result = g_test_run ();
+ 
+diff --git a/gio/tests/org.gtk.test.gschema.override.orig b/gio/tests/org.gtk.test.gschema.override.orig
+new file mode 100644
+index 000000000..6694baace
+--- /dev/null
++++ b/gio/tests/org.gtk.test.gschema.override.orig
+@@ -0,0 +1,2 @@
++[org.gtk.test.per-desktop:GNOME-Classic]
++desktop = "GNOME Classic"
+diff --git a/gio/tests/org.gtk.test.gschema.xml.orig b/gio/tests/org.gtk.test.gschema.xml.orig
+index c07558335..fbcdce683 100644
+--- a/gio/tests/org.gtk.test.gschema.xml.orig
++++ b/gio/tests/org.gtk.test.gschema.xml.orig
+@@ -209,4 +209,10 @@
+     </key>
+   </schema>
+ 
++  <schema id="org.gtk.test.per-desktop" path="/tests/per-desktop/">
++    <key name="desktop" type="s">
++      <default>"GNOME"</default>
++    </key>
++  </schema>
++
+ </schemalist>
+-- 
+2.21.0
+

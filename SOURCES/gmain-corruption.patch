@@ -1,0 +1,386 @@
+From 2bad3cb3bf8f0cc3f45057061f9a538ecf7742b6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Sebastian=20Dr=C3=B6ge?= <sebastian@centricular.com>
+Date: Thu, 14 Feb 2019 17:46:33 +0200
+Subject: [PATCH 1/5] Use atomic reference counting for GSource
+
+If attached to a context already it would use a mutex instead but at
+least before that the reference counting is not thread-safe currently.
+---
+ glib/gmain.c | 50 +++++++++++++++-----------------------------------
+ 1 file changed, 15 insertions(+), 35 deletions(-)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index 26e68823d..5b91c3117 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -374,15 +374,6 @@ typedef struct _GSourceIter
+ #define SOURCE_DESTROYED(source) (((source)->flags & G_HOOK_FLAG_ACTIVE) == 0)
+ #define SOURCE_BLOCKED(source) (((source)->flags & G_SOURCE_BLOCKED) != 0)
+ 
+-#define SOURCE_UNREF(source, context)                       \
+-   G_STMT_START {                                           \
+-    if ((source)->ref_count > 1)                            \
+-      (source)->ref_count--;                                \
+-    else                                                    \
+-      g_source_unref_internal ((source), (context), TRUE);  \
+-   } G_STMT_END
+-
+-
+ /* Forward declarations */
+ 
+ static void g_source_unref_internal             (GSource      *source,
+@@ -977,10 +968,10 @@ g_source_iter_next (GSourceIter *iter, GSource **source)
+    */
+ 
+   if (iter->source && iter->may_modify)
+-    SOURCE_UNREF (iter->source, iter->context);
++    g_source_unref_internal (iter->source, iter->context, TRUE);
+   iter->source = next_source;
+   if (iter->source && iter->may_modify)
+-    iter->source->ref_count++;
++    g_source_ref (iter->source);
+ 
+   *source = iter->source;
+   return *source != NULL;
+@@ -994,7 +985,7 @@ g_source_iter_clear (GSourceIter *iter)
+ {
+   if (iter->source && iter->may_modify)
+     {
+-      SOURCE_UNREF (iter->source, iter->context);
++      g_source_unref_internal (iter->source, iter->context, TRUE);
+       iter->source = NULL;
+     }
+ }
+@@ -1135,7 +1126,7 @@ g_source_attach_unlocked (GSource      *source,
+ 
+   source->context = context;
+   source->source_id = id;
+-  source->ref_count++;
++  g_source_ref (source);
+ 
+   g_hash_table_insert (context->sources, GUINT_TO_POINTER (id), source);
+ 
+@@ -1675,7 +1666,7 @@ g_source_set_funcs (GSource     *source,
+ {
+   g_return_if_fail (source != NULL);
+   g_return_if_fail (source->context == NULL);
+-  g_return_if_fail (source->ref_count > 0);
++  g_return_if_fail (g_atomic_int_get (&source->ref_count) > 0);
+   g_return_if_fail (funcs != NULL);
+ 
+   source->source_funcs = funcs;
+@@ -2050,19 +2041,9 @@ g_source_set_name_by_id (guint           tag,
+ GSource *
+ g_source_ref (GSource *source)
+ {
+-  GMainContext *context;
+-  
+   g_return_val_if_fail (source != NULL, NULL);
+ 
+-  context = source->context;
+-
+-  if (context)
+-    LOCK_CONTEXT (context);
+-
+-  source->ref_count++;
+-
+-  if (context)
+-    UNLOCK_CONTEXT (context);
++  g_atomic_int_inc (&source->ref_count);
+ 
+   return source;
+ }
+@@ -2078,12 +2059,11 @@ g_source_unref_internal (GSource      *source,
+   GSourceCallbackFuncs *old_cb_funcs = NULL;
+ 
+   g_return_if_fail (source != NULL);
+-  
++
+   if (!have_lock && context)
+     LOCK_CONTEXT (context);
+ 
+-  source->ref_count--;
+-  if (source->ref_count == 0)
++  if (g_atomic_int_dec_and_test (&source->ref_count))
+     {
+       TRACE (GLIB_SOURCE_BEFORE_FREE (source, context,
+                                       source->source_funcs->finalize));
+@@ -2107,20 +2087,20 @@ g_source_unref_internal (GSource      *source,
+ 	{
+           /* Temporarily increase the ref count again so that GSource methods
+            * can be called from finalize(). */
+-          source->ref_count++;
++          g_atomic_int_inc (&source->ref_count);
+ 	  if (context)
+ 	    UNLOCK_CONTEXT (context);
+ 	  source->source_funcs->finalize (source);
+ 	  if (context)
+ 	    LOCK_CONTEXT (context);
+-          source->ref_count--;
++          g_atomic_int_add (&source->ref_count, -1);
+ 	}
+ 
+       if (old_cb_funcs)
+         {
+           /* Temporarily increase the ref count again so that GSource methods
+            * can be called from callback_funcs.unref(). */
+-          source->ref_count++;
++          g_atomic_int_inc (&source->ref_count);
+           if (context)
+             UNLOCK_CONTEXT (context);
+ 
+@@ -2128,7 +2108,7 @@ g_source_unref_internal (GSource      *source,
+ 
+           if (context)
+             LOCK_CONTEXT (context);
+-          source->ref_count--;
++          g_atomic_int_add (&source->ref_count, -1);
+         }
+ 
+       g_free (source->name);
+@@ -3201,7 +3181,7 @@ g_main_dispatch (GMainContext *context)
+ 	    }
+ 	}
+       
+-      SOURCE_UNREF (source, context);
++      g_source_unref_internal (source, context, TRUE);
+     }
+ 
+   g_ptr_array_set_size (context->pending_dispatches, 0);
+@@ -3440,7 +3420,7 @@ g_main_context_prepare (GMainContext *context,
+   for (i = 0; i < context->pending_dispatches->len; i++)
+     {
+       if (context->pending_dispatches->pdata[i])
+-	SOURCE_UNREF ((GSource *)context->pending_dispatches->pdata[i], context);
++        g_source_unref_internal ((GSource *)context->pending_dispatches->pdata[i], context, TRUE);
+     }
+   g_ptr_array_set_size (context->pending_dispatches, 0);
+   
+@@ -3788,7 +3768,7 @@ g_main_context_check (GMainContext *context,
+ 
+       if (source->flags & G_SOURCE_READY)
+ 	{
+-	  source->ref_count++;
++          g_source_ref (source);
+ 	  g_ptr_array_add (context->pending_dispatches, source);
+ 
+ 	  n_ready++;
+-- 
+2.31.1
+
+From 323d0c7658a9a44efc327840c0667044a4b98f89 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Sebastian=20Dr=C3=B6ge?= <sebastian@centricular.com>
+Date: Mon, 3 Feb 2020 15:38:28 +0200
+Subject: [PATCH 2/5] GMainContext - Fix GSource iterator if iteration can
+ modify the list
+
+We first have to ref the next source and then unref the previous one.
+This might be the last reference to the previous source, and freeing the
+previous source might unref and free the next one which would then leave
+use with a dangling pointer here.
+
+Fixes https://gitlab.gnome.org/GNOME/glib/issues/2031
+---
+ glib/gmain.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index 5b91c3117..a3ea1d36c 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -965,13 +965,17 @@ g_source_iter_next (GSourceIter *iter, GSource **source)
+    * GSourceList to be removed from source_lists (if iter->source is
+    * the only source in its list, and it is destroyed), so we have to
+    * keep it reffed until after we advance iter->current_list, above.
++   *
++   * Also we first have to ref the next source before unreffing the
++   * previous one as unreffing the previous source can potentially
++   * free the next one.
+    */
++  if (next_source && iter->may_modify)
++    g_source_ref (next_source);
+ 
+   if (iter->source && iter->may_modify)
+     g_source_unref_internal (iter->source, iter->context, TRUE);
+   iter->source = next_source;
+-  if (iter->source && iter->may_modify)
+-    g_source_ref (iter->source);
+ 
+   *source = iter->source;
+   return *source != NULL;
+-- 
+2.31.1
+
+From fc051ec83d8894dd754bf364562ba9be9ff999fc Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Sebastian=20Dr=C3=B6ge?= <sebastian@centricular.com>
+Date: Mon, 3 Feb 2020 15:35:51 +0200
+Subject: [PATCH 3/5] GMainContext - Fix memory leaks and memory corruption
+ when freeing sources while freeing a context
+
+Instead of destroying sources directly while freeing the context, and
+potentially freeing them if this was the last reference to them, collect
+new references of all sources in a separate list before and at the same
+time invalidate their context so that they can't access it anymore. Only
+once all sources have their context invalidated, destroy them while
+still keeping a reference to them. Once all sources are destroyed we get
+rid of the additional references and free them if nothing else keeps a
+reference to them anymore.
+
+This fixes a regression introduced by 26056558be in 2012.
+
+The previous code that invalidated the context of each source and then
+destroyed it before going to the next source without keeping an
+additional reference caused memory leaks or memory corruption depending
+on the order of the sources in the sources lists.
+
+If a source was destroyed it might happen that this was the last
+reference to this source, and it would then be freed. This would cause
+the finalize function to be called, which might destroy and unref
+another source and potentially free it. This other source would then
+either
+- go through the normal free logic and change the intern linked list
+  between the sources, while other sources that are unreffed as part of
+  the main context freeing would not. As such the list would be in an
+  inconsistent state and we might dereference freed memory.
+- go through the normal destroy and free logic but because the context
+  pointer was already invalidated it would simply mark the source as
+  destroyed without actually removing it from the context. This would
+  then cause a memory leak because the reference owned by the context is
+  not freed.
+
+Fixes https://github.com/gtk-rs/glib/issues/583 while still keeping
+https://bugzilla.gnome.org/show_bug.cgi?id=661767 fixes.
+---
+ glib/gmain.c | 35 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index a3ea1d36c..1c249ad02 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -534,6 +534,7 @@ g_main_context_unref (GMainContext *context)
+   GSourceIter iter;
+   GSource *source;
+   GList *sl_iter;
++  GSList *s_iter, *remaining_sources = NULL;
+   GSourceList *list;
+   guint i;
+ 
+@@ -553,10 +554,30 @@ g_main_context_unref (GMainContext *context)
+ 
+   /* g_source_iter_next() assumes the context is locked. */
+   LOCK_CONTEXT (context);
+-  g_source_iter_init (&iter, context, TRUE);
++
++  /* First collect all remaining sources from the sources lists and store a
++   * new reference in a separate list. Also set the context of the sources
++   * to NULL so that they can't access a partially destroyed context anymore.
++   *
++   * We have to do this first so that we have a strong reference to all
++   * sources and destroying them below does not also free them, and so that
++   * none of the sources can access the context from their finalize/dispose
++   * functions. */
++  g_source_iter_init (&iter, context, FALSE);
+   while (g_source_iter_next (&iter, &source))
+     {
+       source->context = NULL;
++      remaining_sources = g_slist_prepend (remaining_sources, g_source_ref (source));
++    }
++  g_source_iter_clear (&iter);
++
++  /* Next destroy all sources. As we still hold a reference to all of them,
++   * this won't cause any of them to be freed yet and especially prevents any
++   * source that unrefs another source from its finalize function to be freed.
++   */
++  for (s_iter = remaining_sources; s_iter; s_iter = s_iter->next)
++    {
++      source = s_iter->data;
+       g_source_destroy_internal (source, context, TRUE);
+     }
+   UNLOCK_CONTEXT (context);
+@@ -581,6 +602,18 @@ g_main_context_unref (GMainContext *context)
+   g_cond_clear (&context->cond);
+ 
+   g_free (context);
++
++  /* And now finally get rid of our references to the sources. This will cause
++   * them to be freed unless something else still has a reference to them. Due
++   * to setting the context pointers in the sources to NULL above, this won't
++   * ever access the context or the internal linked list inside the GSource.
++   * We already removed the sources completely from the context above. */
++  for (s_iter = remaining_sources; s_iter; s_iter = s_iter->next)
++    {
++      source = s_iter->data;
++      g_source_unref_internal (source, NULL, FALSE);
++    }
++  g_slist_free (remaining_sources);
+ }
+ 
+ /* Helper function used by mainloop/overflow test.
+-- 
+2.31.1
+
+From 1d16e92028f235ed9cd786070832d5bd71017661 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Sebastian=20Dr=C3=B6ge?= <sebastian@centricular.com>
+Date: Tue, 11 Feb 2020 09:34:38 +0200
+Subject: [PATCH 4/5] GMainContext - Move mutex unlocking in destructor right
+ before freeing the mutex
+
+This does not have any behaviour changes but is cleaner. The mutex is
+only unlocked now after all operations on the context are done and right
+before freeing the mutex and the context itself.
+---
+ glib/gmain.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index 1c249ad02..44e6ed0c3 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -580,7 +580,6 @@ g_main_context_unref (GMainContext *context)
+       source = s_iter->data;
+       g_source_destroy_internal (source, context, TRUE);
+     }
+-  UNLOCK_CONTEXT (context);
+ 
+   for (sl_iter = context->source_lists; sl_iter; sl_iter = sl_iter->next)
+     {
+@@ -591,6 +590,7 @@ g_main_context_unref (GMainContext *context)
+ 
+   g_hash_table_destroy (context->sources);
+ 
++  UNLOCK_CONTEXT (context);
+   g_mutex_clear (&context->mutex);
+ 
+   g_ptr_array_free (context->pending_dispatches, TRUE);
+-- 
+2.31.1
+
+From 02ad7294ad5895178df73a6cd8546c6e67097493 Mon Sep 17 00:00:00 2001
+From: Benjamin Berg <bberg@redhat.com>
+Date: Tue, 13 Oct 2020 15:09:43 +0200
+Subject: [PATCH 5/5] gmain: Fix possible locking issue in source unref
+
+When unref'ing child sources, the lock is already held. But instead of
+passing TRUE to g_source_unref_internal it currently passes whether the
+lock was already held outside of the current invocation. Just pass TRUE
+to fix this possible issue.
+---
+ glib/gmain.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index 44e6ed0c3..95992253d 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -2164,7 +2164,7 @@ g_source_unref_internal (GSource      *source,
+             g_slist_remove (source->priv->child_sources, child_source);
+           child_source->priv->parent_source = NULL;
+ 
+-          g_source_unref_internal (child_source, context, have_lock);
++          g_source_unref_internal (child_source, context, TRUE);
+         }
+ 
+       g_slice_free (GSourcePrivate, source->priv);
+-- 
+2.31.1

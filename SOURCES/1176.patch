@@ -1,0 +1,371 @@
+From ef1035d9d86464ea0b5dde60a7a0e190895fdf5b Mon Sep 17 00:00:00 2001
+From: Simon McVittie <smcv@collabora.com>
+Date: Mon, 14 Oct 2019 08:22:24 +0100
+Subject: [PATCH] gcredentialsprivate: Document the various private macros
+
+Signed-off-by: Simon McVittie <smcv@collabora.com>
+---
+ gio/gcredentialsprivate.h | 59 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 59 insertions(+)
+
+diff --git a/gio/gcredentialsprivate.h b/gio/gcredentialsprivate.h
+index 4d1c420a8..06f0aed19 100644
+--- a/gio/gcredentialsprivate.h
++++ b/gio/gcredentialsprivate.h
+@@ -22,6 +22,65 @@
+ #include "gio/gcredentials.h"
+ #include "gio/gnetworking.h"
+ 
++/*
++ * G_CREDENTIALS_SUPPORTED:
++ *
++ * Defined to 1 if GCredentials works.
++ */
++#undef G_CREDENTIALS_SUPPORTED
++
++/*
++ * G_CREDENTIALS_USE_LINUX_UCRED, etc.:
++ *
++ * Defined to 1 if GCredentials uses Linux `struct ucred`, etc.
++ */
++#undef G_CREDENTIALS_USE_LINUX_UCRED
++#undef G_CREDENTIALS_USE_FREEBSD_CMSGCRED
++#undef G_CREDENTIALS_USE_NETBSD_UNPCBID
++#undef G_CREDENTIALS_USE_OPENBSD_SOCKPEERCRED
++#undef G_CREDENTIALS_USE_SOLARIS_UCRED
++
++/*
++ * G_CREDENTIALS_NATIVE_TYPE:
++ *
++ * Defined to one of G_CREDENTIALS_TYPE_LINUX_UCRED, etc.
++ */
++#undef G_CREDENTIALS_NATIVE_TYPE
++
++/*
++ * G_CREDENTIALS_NATIVE_SIZE:
++ *
++ * Defined to the size of the %G_CREDENTIALS_NATIVE_TYPE
++ */
++#undef G_CREDENTIALS_NATIVE_SIZE
++
++/*
++ * G_CREDENTIALS_UNIX_CREDENTIALS_MESSAGE_SUPPORTED:
++ *
++ * Defined to 1 if we have a message-passing API in which credentials
++ * are attached to a particular message, such as `SCM_CREDENTIALS` on Linux
++ * or `SCM_CREDS` on FreeBSD.
++ */
++#undef G_CREDENTIALS_UNIX_CREDENTIALS_MESSAGE_SUPPORTED
++
++/*
++ * G_CREDENTIALS_SOCKET_GET_CREDENTIALS_SUPPORTED:
++ *
++ * Defined to 1 if we have a `getsockopt()`-style API in which one end of
++ * a socket connection can directly query the credentials of the process
++ * that initiated the other end, such as `getsockopt SO_PEERCRED` on Linux
++ * or `getpeereid()` on multiple operating systems.
++ */
++#undef G_CREDENTIALS_SOCKET_GET_CREDENTIALS_SUPPORTED
++
++/*
++ * G_CREDENTIALS_SPOOFING_SUPPORTED:
++ *
++ * Defined to 1 if privileged processes can spoof their credentials when
++ * using the message-passing API.
++ */
++#undef G_CREDENTIALS_SPOOFING_SUPPORTED
++
+ #ifdef __linux__
+ #define G_CREDENTIALS_SUPPORTED 1
+ #define G_CREDENTIALS_USE_LINUX_UCRED 1
+-- 
+2.23.0
+
+From ee502dbbe89a5976c32eb8863c9a9d274ddb60e1 Mon Sep 17 00:00:00 2001
+From: Simon McVittie <smcv@collabora.com>
+Date: Mon, 14 Oct 2019 08:47:39 +0100
+Subject: [PATCH] GDBus: prefer getsockopt()-style credentials-passing APIs
+
+Conceptually, a D-Bus server is really trying to determine the credentials
+of (the process that initiated) a connection, not the credentials that
+the process had when it sent a particular message. Ideally, it does
+this with a getsockopt()-style API that queries the credentials of the
+connection's initiator without requiring any particular cooperation from
+that process, avoiding a class of possible failures.
+
+The leading '\0' in the D-Bus protocol is primarily a workaround
+for platforms where the message-based credentials-passing API is
+strictly better than the getsockopt()-style API (for example, on
+FreeBSD, SCM_CREDS includes a process ID but getpeereid() does not),
+or where the getsockopt()-style API does not exist at all. As a result
+libdbus, the reference implementation of D-Bus, does not implement
+Linux SCM_CREDENTIALS at all - it has no reason to do so, because the
+SO_PEERCRED socket option is equally informative.
+
+This change makes GDBusServer on Linux more closely match the behaviour
+of libdbus.
+
+In particular, GNOME/glib#1831 indicates that when a libdbus client
+connects to a GDBus server, recvmsg() sometimes yields a SCM_CREDENTIALS
+message with cmsg_data={pid=0, uid=65534, gid=65534}. I think this is
+most likely a race condition in the early steps to connect:
+
+        client           server
+    connect
+                         accept
+    send '\0' <- race -> set SO_PASSCRED = 1
+                         receive '\0'
+
+If the server wins the race:
+
+        client           server
+    connect
+                         accept
+                         set SO_PASSCRED = 1
+    send '\0'
+                         receive '\0'
+
+then everything is fine. However, if the client wins the race:
+
+        client           server
+    connect
+                         accept
+    send '\0'
+                         set SO_PASSCRED = 1
+                         receive '\0'
+
+then the kernel does not record credentials for the message containing
+'\0' (because SO_PASSCRED was 0 at the time). However, by the time the
+server receives the message, the kernel knows that credentials are
+desired. I would have expected the kernel to omit the credentials header
+in this case, but it seems that instead, it synthesizes a credentials
+structure with a dummy process ID 0, a dummy uid derived from
+/proc/sys/kernel/overflowuid and a dummy gid derived from
+/proc/sys/kernel/overflowgid.
+
+In an unconfigured GDBusServer, hitting this race condition results in
+falling back to DBUS_COOKIE_SHA1 authentication, which in practice usually
+succeeds in authenticating the peer's uid. However, we encourage AF_UNIX
+servers on Unix platforms to allow only EXTERNAL authentication as a
+security-hardening measure, because DBUS_COOKIE_SHA1 relies on a series
+of assumptions including a cryptographically strong PRNG and a shared
+home directory with no write access by others, which are not necessarily
+true for all operating systems and users. EXTERNAL authentication will
+fail if the server cannot determine the client's credentials.
+
+In particular, this caused a regression when CVE-2019-14822 was fixed
+in ibus, which appears to be resolved by this commit. Qt clients
+(which use libdbus) intermittently fail to connect to an ibus server
+(which uses GDBusServer), because ibus no longer allows DBUS_COOKIE_SHA1
+authentication or non-matching uids.
+
+Signed-off-by: Simon McVittie <smcv@collabora.com>
+Closes: https://gitlab.gnome.org/GNOME/glib/issues/1831
+---
+ gio/gcredentialsprivate.h | 18 ++++++++++++++++++
+ gio/gdbusauth.c           | 27 +++++++++++++++++++++++++--
+ 2 files changed, 43 insertions(+), 2 deletions(-)
+
+diff --git a/gio/gcredentialsprivate.h b/gio/gcredentialsprivate.h
+index 06f0aed19..e9ec09b9f 100644
+--- a/gio/gcredentialsprivate.h
++++ b/gio/gcredentialsprivate.h
+@@ -81,6 +81,18 @@
+  */
+ #undef G_CREDENTIALS_SPOOFING_SUPPORTED
+ 
++/*
++ * G_CREDENTIALS_PREFER_MESSAGE_PASSING:
++ *
++ * Defined to 1 if the data structure transferred by the message-passing
++ * API is strictly more informative than the one transferred by the
++ * `getsockopt()`-style API, and hence should be preferred, even for
++ * protocols like D-Bus that are defined in terms of the credentials of
++ * the (process that opened the) socket, as opposed to the credentials
++ * of an individual message.
++ */
++#undef G_CREDENTIALS_PREFER_MESSAGE_PASSING
++
+ #ifdef __linux__
+ #define G_CREDENTIALS_SUPPORTED 1
+ #define G_CREDENTIALS_USE_LINUX_UCRED 1
+@@ -100,6 +112,12 @@
+ #define G_CREDENTIALS_NATIVE_SIZE (sizeof (struct cmsgcred))
+ #define G_CREDENTIALS_UNIX_CREDENTIALS_MESSAGE_SUPPORTED 1
+ #define G_CREDENTIALS_SPOOFING_SUPPORTED 1
++/* GLib doesn't implement it yet, but FreeBSD's getsockopt()-style API
++ * is getpeereid(), which is not as informative as struct cmsgcred -
++ * it does not tell us the PID. As a result, libdbus prefers to use
++ * SCM_CREDS, and if we implement getpeereid() in future, we should
++ * do the same. */
++#define G_CREDENTIALS_PREFER_MESSAGE_PASSING 1
+ 
+ #elif defined(__NetBSD__)
+ #define G_CREDENTIALS_SUPPORTED 1
+diff --git a/gio/gdbusauth.c b/gio/gdbusauth.c
+index 752ec23fc..14cc5d70e 100644
+--- a/gio/gdbusauth.c
++++ b/gio/gdbusauth.c
+@@ -31,6 +31,7 @@
+ #include "gdbusutils.h"
+ #include "gioenumtypes.h"
+ #include "gcredentials.h"
++#include "gcredentialsprivate.h"
+ #include "gdbusprivate.h"
+ #include "giostream.h"
+ #include "gdatainputstream.h"
+@@ -969,9 +970,31 @@ _g_dbus_auth_run_server (GDBusAuth              *auth,
+ 
+   g_data_input_stream_set_newline_type (dis, G_DATA_STREAM_NEWLINE_TYPE_CR_LF);
+ 
+-  /* first read the NUL-byte */
++  /* read the NUL-byte, possibly with credentials attached */
+ #ifdef G_OS_UNIX
+-  if (G_IS_UNIX_CONNECTION (auth->priv->stream))
++#ifndef G_CREDENTIALS_PREFER_MESSAGE_PASSING
++  if (G_IS_SOCKET_CONNECTION (auth->priv->stream))
++    {
++      GSocket *sock = g_socket_connection_get_socket (G_SOCKET_CONNECTION (auth->priv->stream));
++
++      local_error = NULL;
++      credentials = g_socket_get_credentials (sock, &local_error);
++
++      if (credentials == NULL && !g_error_matches (local_error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
++        {
++          g_propagate_error (error, local_error);
++          goto out;
++        }
++      else
++        {
++          /* Clear the error indicator, so we can retry with
++           * g_unix_connection_receive_credentials() if necessary */
++          g_clear_error (&local_error);
++        }
++    }
++#endif
++
++  if (credentials == NULL && G_IS_UNIX_CONNECTION (auth->priv->stream))
+     {
+       local_error = NULL;
+       credentials = g_unix_connection_receive_credentials (G_UNIX_CONNECTION (auth->priv->stream),
+-- 
+2.23.0
+
+From 1485a97d8051b0aa047987f7b0c0bfe4ba4ce55b Mon Sep 17 00:00:00 2001
+From: Simon McVittie <smcv@collabora.com>
+Date: Fri, 18 Oct 2019 10:55:09 +0100
+Subject: [PATCH] credentials: Invalid Linux struct ucred means "no
+ information"
+
+On Linux, if getsockopt SO_PEERCRED is used on a TCP socket, one
+might expect it to fail with an appropriate error like ENOTSUP or
+EPROTONOSUPPORT. However, it appears that in fact it succeeds, but
+yields a credentials structure with pid 0, uid -1 and gid -1. These
+are not real process, user and group IDs that can be allocated to a
+real process (pid 0 needs to be reserved to give kill(0) its documented
+special semantics, and similarly uid and gid -1 need to be reserved for
+setresuid() and setresgid()) so it is not meaningful to signal them to
+high-level API users.
+
+An API user with Linux-specific knowledge can still inspect these fields
+via g_credentials_get_native() if desired.
+
+Similarly, if SO_PASSCRED is used to receive a SCM_CREDENTIALS message
+on a receiving Unix socket, but the sending socket had not enabled
+SO_PASSCRED at the time that the message was sent, it is possible
+for it to succeed but yield a credentials structure with pid 0, uid
+/proc/sys/kernel/overflowuid and gid /proc/sys/kernel/overflowgid. Even
+if we were to read those pseudo-files, we cannot distinguish between
+the overflow IDs and a real process that legitimately has the same IDs
+(typically they are set to 'nobody' and 'nogroup', which can be used
+by a real process), so we detect this situation by noticing that
+pid == 0, and to save syscalls we do not read the overflow IDs from
+/proc at all.
+
+This results in a small API change: g_credentials_is_same_user() now
+returns FALSE if we compare two credentials structures that are both
+invalid. This seems like reasonable, conservative behaviour: if we cannot
+prove that they are the same user, we should assume they are not.
+
+Signed-off-by: Simon McVittie <smcv@collabora.com>
+---
+ gio/gcredentials.c | 42 +++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/gio/gcredentials.c b/gio/gcredentials.c
+index c350e3c88..c4794ded7 100644
+--- a/gio/gcredentials.c
++++ b/gio/gcredentials.c
+@@ -265,6 +265,35 @@ g_credentials_to_string (GCredentials *credentials)
+ 
+ /* ---------------------------------------------------------------------------------------------------- */
+ 
++#if G_CREDENTIALS_USE_LINUX_UCRED
++/*
++ * Check whether @native contains invalid data. If getsockopt SO_PEERCRED
++ * is used on a TCP socket, it succeeds but yields a credentials structure
++ * with pid 0, uid -1 and gid -1. Similarly, if SO_PASSCRED is used on a
++ * receiving Unix socket when the sending socket did not also enable
++ * SO_PASSCRED, it can succeed but yield a credentials structure with
++ * pid 0, uid /proc/sys/kernel/overflowuid and gid
++ * /proc/sys/kernel/overflowgid.
++ */
++static gboolean
++linux_ucred_check_valid (struct ucred  *native,
++                         GError       **error)
++{
++  if (native->pid == 0
++      || native->uid == -1
++      || native->gid == -1)
++    {
++      g_set_error_literal (error,
++                           G_IO_ERROR,
++                           G_IO_ERROR_INVALID_DATA,
++                           _("GCredentials contains invalid data"));
++      return FALSE;
++    }
++
++  return TRUE;
++}
++#endif
++
+ /**
+  * g_credentials_is_same_user:
+  * @credentials: A #GCredentials.
+@@ -294,7 +323,8 @@ g_credentials_is_same_user (GCredentials  *credentials,
+ 
+   ret = FALSE;
+ #if G_CREDENTIALS_USE_LINUX_UCRED
+-  if (credentials->native.uid == other_credentials->native.uid)
++  if (linux_ucred_check_valid (&credentials->native, NULL)
++      && credentials->native.uid == other_credentials->native.uid)
+     ret = TRUE;
+ #elif G_CREDENTIALS_USE_FREEBSD_CMSGCRED
+   if (credentials->native.cmcred_euid == other_credentials->native.cmcred_euid)
+@@ -453,7 +483,10 @@ g_credentials_get_unix_user (GCredentials    *credentials,
+   g_return_val_if_fail (error == NULL || *error == NULL, -1);
+ 
+ #if G_CREDENTIALS_USE_LINUX_UCRED
+-  ret = credentials->native.uid;
++  if (linux_ucred_check_valid (&credentials->native, error))
++    ret = credentials->native.uid;
++  else
++    ret = -1;
+ #elif G_CREDENTIALS_USE_FREEBSD_CMSGCRED
+   ret = credentials->native.cmcred_euid;
+ #elif G_CREDENTIALS_USE_NETBSD_UNPCBID
+@@ -499,7 +532,10 @@ g_credentials_get_unix_pid (GCredentials    *credentials,
+   g_return_val_if_fail (error == NULL || *error == NULL, -1);
+ 
+ #if G_CREDENTIALS_USE_LINUX_UCRED
+-  ret = credentials->native.pid;
++  if (linux_ucred_check_valid (&credentials->native, error))
++    ret = credentials->native.pid;
++  else
++    ret = -1;
+ #elif G_CREDENTIALS_USE_FREEBSD_CMSGCRED
+   ret = credentials->native.cmcred_pid;
+ #elif G_CREDENTIALS_USE_NETBSD_UNPCBID
+-- 
+2.23.0
+

@@ -1,0 +1,21 @@
+From 521f9605e0ab019ec9a493153ca0c8fe4267d665 Mon Sep 17 00:00:00 2001
+From: Ray Strode <rstrode@redhat.com>
+Date: Mon, 17 Dec 2018 15:46:10 -0500
+Subject: [PATCH] spawn: add shebang line to script
+
+downstream tools get confused when the script is missing a shebang
+line, and having a shebang line doesn't hurt, so add one.
+---
+ glib/tests/echo-script | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/glib/tests/echo-script b/glib/tests/echo-script
+index c732ed910..b609f2d39 100755
+--- a/glib/tests/echo-script
++++ b/glib/tests/echo-script
+@@ -1 +1,2 @@
++#!/bin/sh
+ echo "echo"
+-- 
+2.20.0
+
