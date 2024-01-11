@@ -1,0 +1,739 @@
+From 9645cbffa8ba1a08b73fdae50b31125d11aa5684 Mon Sep 17 00:00:00 2001
+From: Bastien Nocera <hadess@hadess.net>
+Date: Mon, 9 Aug 2021 23:19:17 +0200
+Subject: [PATCH 1/4] gio: Add portal version of GPowerProfileMonitor
+
+---
+ docs/reference/gio/meson.build   |   1 +
+ gio/giomodule.c                  |   2 +
+ gio/gpowerprofilemonitorportal.c | 182 +++++++++++++++++++++++++++++++
+ gio/gpowerprofilemonitorportal.h |  31 ++++++
+ gio/meson.build                  |   1 +
+ 5 files changed, 217 insertions(+)
+ create mode 100644 gio/gpowerprofilemonitorportal.c
+ create mode 100644 gio/gpowerprofilemonitorportal.h
+
+diff --git a/docs/reference/gio/meson.build b/docs/reference/gio/meson.build
+index fbabd25ca..9aaafeed5 100644
+--- a/docs/reference/gio/meson.build
++++ b/docs/reference/gio/meson.build
+@@ -66,6 +66,7 @@ if get_option('gtk_doc')
+     'gpollfilemonitor.h',
+     'gportalsupport.h',
+     'gpowerprofilemonitordbus.h',
++    'gpowerprofilemonitorportal.h',
+     'gproxyresolverportal.h',
+     'gregistrysettingsbackend.h',
+     'gresourcefile.h',
+diff --git a/gio/giomodule.c b/gio/giomodule.c
+index dfd895717..d34037a45 100644
+--- a/gio/giomodule.c
++++ b/gio/giomodule.c
+@@ -50,6 +50,7 @@
+ #include "gmemorymonitordbus.h"
+ #include "gpowerprofilemonitor.h"
+ #include "gpowerprofilemonitordbus.h"
++#include "gpowerprofilemonitorportal.h"
+ #ifdef G_OS_WIN32
+ #include "gregistrysettingsbackend.h"
+ #include "giowin32-priv.h"
+@@ -1305,6 +1306,7 @@ _g_io_modules_ensure_loaded (void)
+       g_type_ensure (g_memory_monitor_dbus_get_type ());
+       g_type_ensure (g_memory_monitor_portal_get_type ());
+       g_type_ensure (g_network_monitor_portal_get_type ());
++      g_type_ensure (g_power_profile_monitor_portal_get_type ());
+       g_type_ensure (g_proxy_resolver_portal_get_type ());
+ #endif
+ #if MAC_OS_X_VERSION_MIN_REQUIRED >= 1090
+diff --git a/gio/gpowerprofilemonitorportal.c b/gio/gpowerprofilemonitorportal.c
+new file mode 100644
+index 000000000..bb1b4fd15
+--- /dev/null
++++ b/gio/gpowerprofilemonitorportal.c
+@@ -0,0 +1,182 @@
++/* GIO - GLib Input, Output and Streaming Library
++ *
++ * Copyright 2021 Red Hat, Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General
++ * Public License along with this library; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "config.h"
++
++#include "gpowerprofilemonitor.h"
++#include "gpowerprofilemonitorportal.h"
++#include "gdbuserror.h"
++#include "gdbusproxy.h"
++#include "ginitable.h"
++#include "gioerror.h"
++#include "giomodule-priv.h"
++#include "gportalsupport.h"
++
++#define G_POWER_PROFILE_MONITOR_PORTAL_GET_INITABLE_IFACE(o) (G_TYPE_INSTANCE_GET_INTERFACE ((o), G_TYPE_INITABLE, GInitable))
++
++static void g_power_profile_monitor_portal_iface_init (GPowerProfileMonitorInterface *iface);
++static void g_power_profile_monitor_portal_initable_iface_init (GInitableIface *iface);
++
++typedef enum
++{
++  PROP_POWER_SAVER_ENABLED = 1,
++} GPowerProfileMonitorPortalProperty;
++
++struct _GPowerProfileMonitorPortal
++{
++  GObject parent_instance;
++
++  GDBusProxy *proxy;
++  gulong signal_id;
++  gboolean power_saver_enabled;
++};
++
++G_DEFINE_TYPE_WITH_CODE (GPowerProfileMonitorPortal, g_power_profile_monitor_portal, G_TYPE_OBJECT,
++                         G_IMPLEMENT_INTERFACE (G_TYPE_INITABLE,
++                                                g_power_profile_monitor_portal_initable_iface_init)
++                         G_IMPLEMENT_INTERFACE (G_TYPE_POWER_PROFILE_MONITOR,
++                                                g_power_profile_monitor_portal_iface_init)
++                         _g_io_modules_ensure_extension_points_registered ();
++                         g_io_extension_point_implement (G_POWER_PROFILE_MONITOR_EXTENSION_POINT_NAME,
++                                                         g_define_type_id,
++                                                         "portal",
++                                                         40))
++
++static void
++g_power_profile_monitor_portal_init (GPowerProfileMonitorPortal *portal)
++{
++}
++
++static void
++proxy_properties_changed (GDBusProxy *proxy,
++                          GVariant   *changed_properties,
++                          GStrv       invalidated_properties,
++                          gpointer    user_data)
++{
++  GPowerProfileMonitorPortal *ppm = user_data;
++  gboolean power_saver_enabled;
++
++  if (!g_variant_lookup (changed_properties, "power-saver-enabled", "b", &power_saver_enabled))
++    return;
++
++  if (power_saver_enabled == ppm->power_saver_enabled)
++    return;
++
++  ppm->power_saver_enabled = power_saver_enabled;
++  g_object_notify (G_OBJECT (ppm), "power-saver-enabled");
++}
++
++static void
++g_power_profile_monitor_portal_get_property (GObject    *object,
++                                             guint       prop_id,
++                                             GValue     *value,
++                                             GParamSpec *pspec)
++{
++  GPowerProfileMonitorPortal *ppm = G_POWER_PROFILE_MONITOR_PORTAL (object);
++
++  switch ((GPowerProfileMonitorPortalProperty) prop_id)
++    {
++    case PROP_POWER_SAVER_ENABLED:
++      g_value_set_boolean (value, ppm->power_saver_enabled);
++      break;
++
++    default:
++      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
++    }
++}
++
++static gboolean
++g_power_profile_monitor_portal_initable_init (GInitable     *initable,
++                                              GCancellable  *cancellable,
++                                              GError       **error)
++{
++  GPowerProfileMonitorPortal *ppm = G_POWER_PROFILE_MONITOR_PORTAL (initable);
++  GDBusProxy *proxy;
++  gchar *name_owner;
++
++  if (!glib_should_use_portal ())
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Not using portals");
++      return FALSE;
++    }
++
++  proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SESSION,
++                                         G_DBUS_PROXY_FLAGS_NONE,
++                                         NULL,
++                                         "org.freedesktop.portal.Desktop",
++                                         "/org/freedesktop/portal/desktop",
++                                         "org.freedesktop.portal.PowerProfileMonitor",
++                                         cancellable,
++                                         error);
++  if (!proxy)
++    return FALSE;
++
++  name_owner = g_dbus_proxy_get_name_owner (proxy);
++
++  if (name_owner == NULL)
++    {
++      g_object_unref (proxy);
++      g_set_error (error,
++                   G_DBUS_ERROR,
++                   G_DBUS_ERROR_NAME_HAS_NO_OWNER,
++                   "Desktop portal not found");
++      return FALSE;
++    }
++
++  g_free (name_owner);
++
++  ppm->signal_id = g_signal_connect (proxy, "g-properties-changed",
++                                     G_CALLBACK (proxy_properties_changed), ppm);
++
++  ppm->proxy = g_steal_pointer (&proxy);
++
++  return TRUE;
++}
++
++static void
++g_power_profile_monitor_portal_finalize (GObject *object)
++{
++  GPowerProfileMonitorPortal *ppm = G_POWER_PROFILE_MONITOR_PORTAL (object);
++
++  g_clear_signal_handler (&ppm->signal_id, ppm->proxy);
++  g_clear_object (&ppm->proxy);
++
++  G_OBJECT_CLASS (g_power_profile_monitor_portal_parent_class)->finalize (object);
++}
++
++static void
++g_power_profile_monitor_portal_class_init (GPowerProfileMonitorPortalClass *nl_class)
++{
++  GObjectClass *gobject_class = G_OBJECT_CLASS (nl_class);
++
++  gobject_class->get_property = g_power_profile_monitor_portal_get_property;
++  gobject_class->finalize  = g_power_profile_monitor_portal_finalize;
++
++  g_object_class_override_property (gobject_class, PROP_POWER_SAVER_ENABLED, "power-saver-enabled");
++}
++
++static void
++g_power_profile_monitor_portal_iface_init (GPowerProfileMonitorInterface *monitor_iface)
++{
++}
++
++static void
++g_power_profile_monitor_portal_initable_iface_init (GInitableIface *iface)
++{
++  iface->init = g_power_profile_monitor_portal_initable_init;
++}
+diff --git a/gio/gpowerprofilemonitorportal.h b/gio/gpowerprofilemonitorportal.h
+new file mode 100644
+index 000000000..b91a14610
+--- /dev/null
++++ b/gio/gpowerprofilemonitorportal.h
+@@ -0,0 +1,31 @@
++/* GIO - GLib Input, Output and Streaming Library
++ *
++ * Copyright 2021 Red Hat, Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General
++ * Public License along with this library; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef __G_POWER_PROFILE_MONITOR_PORTAL_H__
++#define __G_POWER_PROFILE_MONITOR_PORTAL_H__
++
++#include <glib-object.h>
++
++G_BEGIN_DECLS
++
++#define G_TYPE_POWER_PROFILE_MONITOR_PORTAL         (g_power_profile_monitor_portal_get_type ())
++G_DECLARE_FINAL_TYPE (GPowerProfileMonitorPortal, g_power_profile_monitor_portal, G, POWER_PROFILE_MONITOR_PORTAL, GObject)
++
++G_END_DECLS
++
++#endif /* __G_POWER_PROFILE_MONITOR_PORTAL_H__ */
+diff --git a/gio/meson.build b/gio/meson.build
+index d5838ed8a..ac3373f2b 100644
+--- a/gio/meson.build
++++ b/gio/meson.build
+@@ -383,6 +383,7 @@ if host_system != 'windows'
+     'gopenuriportal.c',
+     'gmemorymonitorportal.c',
+     'gnetworkmonitorportal.c',
++    'gpowerprofilemonitorportal.c',
+     'gproxyresolverportal.c',
+     'gtrashportal.c',
+     'gportalsupport.c',
+-- 
+GitLab
+
+
+From 18eb29897d80bf662d58bd11a89617ddd7ebfeed Mon Sep 17 00:00:00 2001
+From: Bastien Nocera <hadess@hadess.net>
+Date: Tue, 10 Aug 2021 10:58:53 +0200
+Subject: [PATCH 2/4] gio: Add GPowerProfileMonitor tests
+
+Tests both the portal and direct D-Bus variants.
+---
+ gio/tests/meson.build                        |  14 ++-
+ gio/tests/power-profile-monitor-dbus.py.in   | 107 ++++++++++++++++
+ gio/tests/power-profile-monitor-portal.py.in | 126 +++++++++++++++++++
+ 3 files changed, 241 insertions(+), 6 deletions(-)
+ create mode 100755 gio/tests/power-profile-monitor-dbus.py.in
+ create mode 100755 gio/tests/power-profile-monitor-portal.py.in
+
+diff --git a/gio/tests/meson.build b/gio/tests/meson.build
+index fc2055101..5dbfb8e60 100644
+--- a/gio/tests/meson.build
++++ b/gio/tests/meson.build
+@@ -541,27 +541,29 @@ if installed_tests_enabled
+   install_subdir('static-link', install_dir : installed_tests_execdir)
+   install_data('static-link.py', install_dir : installed_tests_execdir)
+ 
+-  memory_monitor_tests = [
++  monitor_tests = [
+     'memory-monitor-dbus',
+     'memory-monitor-portal',
++    'power-profile-monitor-dbus',
++    'power-profile-monitor-portal'
+   ]
+ 
+-  foreach memory_monitor_test : memory_monitor_tests
++  foreach monitor_test : monitor_tests
+     cdata = configuration_data()
+     cdata.set('installed_tests_dir', installed_tests_execdir)
+-    cdata.set('program', memory_monitor_test + '.py')
++    cdata.set('program', monitor_test + '.py')
+     cdata.set('env', '')
+     configure_file(
+       input: installed_tests_template_tap,
+-      output: memory_monitor_test + '.test',
++      output: monitor_test + '.test',
+       install_dir: installed_tests_metadir,
+       configuration: cdata
+     )
+     cdata = configuration_data()
+     cdata.set('libexecdir', join_paths(glib_prefix, get_option('libexecdir')))
+     configure_file(
+-      input: memory_monitor_test + '.py.in',
+-      output: memory_monitor_test + '.py',
++      input: monitor_test + '.py.in',
++      output: monitor_test + '.py',
+       install_dir : installed_tests_execdir,
+       configuration: cdata,
+     )
+diff --git a/gio/tests/power-profile-monitor-dbus.py.in b/gio/tests/power-profile-monitor-dbus.py.in
+new file mode 100755
+index 000000000..06e594f4a
+--- /dev/null
++++ b/gio/tests/power-profile-monitor-dbus.py.in
+@@ -0,0 +1,107 @@
++#!/usr/bin/python3
++
++# This program is free software; you can redistribute it and/or modify it under
++# the terms of the GNU Lesser General Public License as published by the Free
++# Software Foundation; either version 3 of the License, or (at your option) any
++# later version.  See http://www.gnu.org/copyleft/lgpl.html for the full text
++# of the license.
++
++__author__ = 'Bastien Nocera'
++__email__ = 'hadess@hadess.net'
++__copyright__ = '(c) 2019, 2021 Red Hat Inc.'
++__license__ = 'LGPL 3+'
++
++import unittest
++import sys
++import subprocess
++import fcntl
++import os
++import time
++
++import taptestrunner
++
++try:
++    # Do all non-standard imports here so we can skip the tests if any
++    # needed packages are not available.
++    import dbus
++    import dbus.mainloop.glib
++    import dbusmock
++    from gi.repository import GLib
++    from gi.repository import Gio
++
++    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
++
++    class TestPowerProfileMonitor(dbusmock.DBusTestCase):
++        '''Test GPowerProfileMonitorDBus'''
++
++        @classmethod
++        def setUpClass(klass):
++            klass.start_system_bus()
++            klass.dbus_con = klass.get_dbus(True)
++
++        def setUp(self):
++            try:
++                Gio.PowerProfileMonitor
++            except AttributeError:
++                raise unittest.SkipTest('Power Profile Monitor not in '
++                                        'introspection data. Requires '
++                                        'GObject-Introspection ≥ 1.63.2') # FIXME version
++            try:
++                (self.p_mock, self.obj_ppd) = self.spawn_server_template(
++                    'power_profiles_daemon', {}, stdout=subprocess.PIPE)
++            except ModuleNotFoundError:
++                raise unittest.SkipTest("power-profiles-daemon dbusmock template not "
++                                        "found. Requires dbusmock > 0.23.1.") # FIXME version
++            # set log to nonblocking
++            flags = fcntl.fcntl(self.p_mock.stdout, fcntl.F_GETFL)
++            fcntl.fcntl(self.p_mock.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
++            self.power_saver_enabled = False
++            self.dbus_props = dbus.Interface(self.obj_ppd, dbus.PROPERTIES_IFACE)
++            self.power_profile_monitor = Gio.PowerProfileMonitor.dup_default()
++            self.power_profile_monitor.connect("notify::power-saver-enabled", self.power_saver_enabled_cb)
++            self.mainloop = GLib.MainLoop()
++            self.main_context = self.mainloop.get_context()
++
++        def tearDown(self):
++            self.p_mock.terminate()
++            self.p_mock.wait()
++
++        def assertEventually(self, condition, message=None, timeout=50):
++            '''Assert that condition function eventually returns True.
++
++            Timeout is in deciseconds, defaulting to 50 (5 seconds). message is
++            printed on failure.
++            '''
++            while timeout >= 0:
++                context = GLib.MainContext.default()
++                while context.iteration(False):
++                    pass
++                if condition():
++                    break
++                timeout -= 1
++                time.sleep(0.1)
++            else:
++                self.fail(message or 'timed out waiting for ' + str(condition))
++
++        def power_saver_enabled_cb(self, spec, data):
++            self.power_saver_enabled = self.power_profile_monitor.get_power_saver_enabled()
++            self.main_context.wakeup()
++
++        def test_power_profile_power_saver_enabled(self):
++            '''power-saver-enabled property'''
++
++            self.assertEqual(self.power_profile_monitor.get_power_saver_enabled(), False)
++            self.dbus_props.Set('net.hadess.PowerProfiles', 'ActiveProfile', dbus.String('power-saver', variant_level=1))
++            self.assertEventually(lambda: self.power_saver_enabled == True, "power-saver didn't become enabled", 10)
++
++            self.dbus_props.Set('net.hadess.PowerProfiles', 'ActiveProfile', dbus.String('balanced', variant_level=1))
++            self.assertEventually(lambda: self.power_saver_enabled == False, "power-saver didn't become disabled", 10)
++
++except ImportError as e:
++    @unittest.skip("Cannot import %s" % e.name)
++    class TestPowerProfileMonitor(unittest.TestCase):
++        def test_power_profile_power_saver_enabled(self):
++            pass
++
++if __name__ == '__main__':
++    unittest.main(testRunner=taptestrunner.TAPTestRunner())
+diff --git a/gio/tests/power-profile-monitor-portal.py.in b/gio/tests/power-profile-monitor-portal.py.in
+new file mode 100755
+index 000000000..960a62232
+--- /dev/null
++++ b/gio/tests/power-profile-monitor-portal.py.in
+@@ -0,0 +1,126 @@
++#!/usr/bin/python3
++
++# This program is free software; you can redistribute it and/or modify it under
++# the terms of the GNU Lesser General Public License as published by the Free
++# Software Foundation; either version 3 of the License, or (at your option) any
++# later version.  See http://www.gnu.org/copyleft/lgpl.html for the full text
++# of the license.
++
++__author__ = 'Bastien Nocera'
++__email__ = 'hadess@hadess.net'
++__copyright__ = '(c) 2021 Red Hat Inc.'
++__license__ = 'LGPL 3+'
++
++import unittest
++import sys
++import subprocess
++import fcntl
++import os
++import time
++
++import taptestrunner
++
++try:
++    # Do all non-standard imports here so we can skip the tests if any
++    # needed packages are not available.
++    import dbus
++    import dbus.mainloop.glib
++    import dbusmock
++    from gi.repository import GLib
++    from gi.repository import Gio
++
++    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
++
++    # XDG_DESKTOP_PORTAL_PATH = os.path.expanduser("~/.cache/jhbuild/build/xdg-desktop-portal/xdg-desktop-portal")
++    XDG_DESKTOP_PORTAL_PATH = "@libexecdir@/xdg-desktop-portal"
++
++    class TestPowerProfileMonitorPortal(dbusmock.DBusTestCase):
++        '''Test GPowerProfileMonitorPortal'''
++
++        @classmethod
++        def setUpClass(klass):
++            klass.start_system_bus()
++            klass.dbus_con = klass.get_dbus(True)
++            # Start session bus so that xdg-desktop-portal can run on it
++            klass.start_session_bus()
++
++        def setUp(self):
++            try:
++                Gio.PowerProfileMonitor
++            except AttributeError:
++                raise unittest.SkipTest('Power Profile Monitor not in '
++                                        'introspection data. Requires '
++                                        'GObject-Introspection > 1.69.0')
++            try:
++                (self.p_mock, self.obj_ppd) = self.spawn_server_template(
++                    'power_profiles_daemon', {}, stdout=subprocess.PIPE)
++            except ModuleNotFoundError:
++                raise unittest.SkipTest("power-profiles-daemon dbusmock template not "
++                                        "found. Requires dbusmock > 0.23.1.")
++            # set log to nonblocking
++            flags = fcntl.fcntl(self.p_mock.stdout, fcntl.F_GETFL)
++            fcntl.fcntl(self.p_mock.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
++            self.power_saver_enabled = False
++            self.dbus_props = dbus.Interface(self.obj_ppd, dbus.PROPERTIES_IFACE)
++            try:
++                self.xdp = subprocess.Popen([XDG_DESKTOP_PORTAL_PATH])
++            except FileNotFoundError:
++                raise unittest.SkipTest("xdg-desktop-portal not available")
++
++            try:
++                self.wait_for_bus_object('org.freedesktop.portal.Desktop',
++                                        '/org/freedesktop/portal/desktop')
++            except:
++                raise
++            # subprocess.Popen(['gdbus', 'monitor', '--session', '--dest', 'org.freedesktop.portal.Desktop'])
++
++            os.environ['GTK_USE_PORTAL'] = "1"
++            self.power_profile_monitor = Gio.PowerProfileMonitor.dup_default()
++            assert("GPowerProfileMonitorPortal" in str(self.power_profile_monitor))
++            self.power_profile_monitor.connect("notify::power-saver-enabled", self.power_saver_enabled_cb)
++            self.mainloop = GLib.MainLoop()
++            self.main_context = self.mainloop.get_context()
++
++        def tearDown(self):
++            self.p_mock.terminate()
++            self.p_mock.wait()
++
++        def assertEventually(self, condition, message=None, timeout=50):
++            '''Assert that condition function eventually returns True.
++
++            Timeout is in deciseconds, defaulting to 50 (5 seconds). message is
++            printed on failure.
++            '''
++            while timeout >= 0:
++                context = GLib.MainContext.default()
++                while context.iteration(False):
++                    pass
++                if condition():
++                    break
++                timeout -= 1
++                time.sleep(0.1)
++            else:
++                self.fail(message or 'timed out waiting for ' + str(condition))
++
++        def power_saver_enabled_cb(self, spec, data):
++            self.power_saver_enabled = self.power_profile_monitor.get_power_saver_enabled()
++            self.main_context.wakeup()
++
++        def test_power_profile_power_saver_enabled_portal(self):
++            '''power-saver-enabled property'''
++
++            self.assertEqual(self.power_profile_monitor.get_power_saver_enabled(), False)
++            self.dbus_props.Set('net.hadess.PowerProfiles', 'ActiveProfile', dbus.String('power-saver', variant_level=1))
++            self.assertEventually(lambda: self.power_saver_enabled == True, "power-saver didn't become enabled", 10)
++
++            self.dbus_props.Set('net.hadess.PowerProfiles', 'ActiveProfile', dbus.String('balanced', variant_level=1))
++            self.assertEventually(lambda: self.power_saver_enabled == False, "power-saver didn't become disabled", 10)
++
++except ImportError as e:
++    @unittest.skip("Cannot import %s" % e.name)
++    class TestPowerProfileMonitorPortal(unittest.TestCase):
++        def test_power_profile_power_saver_enabled_portal(self):
++            pass
++
++if __name__ == '__main__':
++    unittest.main(testRunner=taptestrunner.TAPTestRunner())
+-- 
+GitLab
+
+
+From 66acea8418eb3d8e46bb6f93dc0c3f13a1f7822b Mon Sep 17 00:00:00 2001
+From: Bastien Nocera <hadess@hadess.net>
+Date: Wed, 11 Aug 2021 15:37:40 +0200
+Subject: [PATCH 3/4] gio: Remove left-over debug statement from memory monitor
+ portal test
+
+---
+ gio/tests/memory-monitor-portal.py.in | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/gio/tests/memory-monitor-portal.py.in b/gio/tests/memory-monitor-portal.py.in
+index cb4a960eb..f5fd2283f 100755
+--- a/gio/tests/memory-monitor-portal.py.in
++++ b/gio/tests/memory-monitor-portal.py.in
+@@ -31,7 +31,6 @@ try:
+ 
+     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+ 
+-    # XDG_DESKTOP_PORTAL_PATH = os.path.expanduser("~/.cache/jhbuild/build/xdg-desktop-portal/xdg-desktop-portal")
+     XDG_DESKTOP_PORTAL_PATH = "@libexecdir@/xdg-desktop-portal"
+ 
+     class TestLowMemoryMonitorPortal(dbusmock.DBusTestCase):
+-- 
+GitLab
+
+
+From 2e9842cafc73a7fb94cfde7937e125e1a91f35f8 Mon Sep 17 00:00:00 2001
+From: Bastien Nocera <hadess@hadess.net>
+Date: Wed, 11 Aug 2021 15:38:12 +0200
+Subject: [PATCH 4/4] gio: Simplify memory monitor tests by using
+ assertEventually() helper
+
+assertEventually is a helper used in a number of projects that use
+dbusmock.
+
+See https://github.com/martinpitt/python-dbusmock/issues/82
+---
+ gio/tests/memory-monitor-dbus.py.in   | 31 ++++++++++++++++-----------
+ gio/tests/memory-monitor-portal.py.in | 31 ++++++++++++++++-----------
+ 2 files changed, 38 insertions(+), 24 deletions(-)
+
+diff --git a/gio/tests/memory-monitor-dbus.py.in b/gio/tests/memory-monitor-dbus.py.in
+index 7823e7309..e8ac28faf 100755
+--- a/gio/tests/memory-monitor-dbus.py.in
++++ b/gio/tests/memory-monitor-dbus.py.in
+@@ -66,6 +66,23 @@ try:
+             self.p_mock.terminate()
+             self.p_mock.wait()
+ 
++        def assertEventually(self, condition, message=None, timeout=50):
++            '''Assert that condition function eventually returns True.
++
++            Timeout is in deciseconds, defaulting to 50 (5 seconds). message is
++            printed on failure.
++            '''
++            while timeout >= 0:
++                context = GLib.MainContext.default()
++                while context.iteration(False):
++                    pass
++                if condition():
++                    break
++                timeout -= 1
++                time.sleep(0.1)
++            else:
++                self.fail(message or 'timed out waiting for ' + str(condition))
++
+         def memory_warning_cb(self, monitor, level):
+             self.last_warning = level
+             self.main_context.wakeup()
+@@ -82,21 +99,11 @@ try:
+ 
+             self.dbusmock.EmitWarning(100)
+             # Wait 2 seconds or until warning
+-            timeout = 2
+-            while timeout > 0 and self.last_warning != 100:
+-                time.sleep(0.5)
+-                timeout -= 0.5
+-                self.main_context.iteration(False)
+-            self.assertEqual(self.last_warning, 100)
++            self.assertEventually(self.last_warning == 100, "'100' low-memory warning not received", 20)
+ 
+             self.dbusmock.EmitWarning(255)
+             # Wait 2 seconds or until warning
+-            timeout = 2
+-            while timeout > 0 and self.last_warning != 255:
+-                time.sleep(0.5)
+-                timeout -= 0.5
+-                self.main_context.iteration(False)
+-            self.assertEqual(self.last_warning, 255)
++            self.assertEventually(self.last_warning == 255, "'255' low-memory warning not received", 20)
+ 
+ except ImportError as e:
+     @unittest.skip("Cannot import %s" % e.name)
+diff --git a/gio/tests/memory-monitor-portal.py.in b/gio/tests/memory-monitor-portal.py.in
+index f5fd2283f..36d5094d3 100755
+--- a/gio/tests/memory-monitor-portal.py.in
++++ b/gio/tests/memory-monitor-portal.py.in
+@@ -84,6 +84,23 @@ try:
+             self.p_mock.terminate()
+             self.p_mock.wait()
+ 
++        def assertEventually(self, condition, message=None, timeout=50):
++            '''Assert that condition function eventually returns True.
++
++            Timeout is in deciseconds, defaulting to 50 (5 seconds). message is
++            printed on failure.
++            '''
++            while timeout >= 0:
++                context = GLib.MainContext.default()
++                while context.iteration(False):
++                    pass
++                if condition():
++                    break
++                timeout -= 1
++                time.sleep(0.1)
++            else:
++                self.fail(message or 'timed out waiting for ' + str(condition))
++
+         def portal_memory_warning_cb(self, monitor, level):
+             self.last_warning = level
+             self.main_context.wakeup()
+@@ -100,21 +117,11 @@ try:
+ 
+             self.dbusmock.EmitWarning(100)
+             # Wait 2 seconds or until warning
+-            timeout = 2
+-            while timeout > 0 and self.last_warning != 100:
+-                time.sleep(0.5)
+-                timeout -= 0.5
+-                self.main_context.iteration(False)
+-            self.assertEqual(self.last_warning, 100)
++            self.assertEventually(self.last_warning == 100, "'100' low-memory warning not received", 20)
+ 
+             self.dbusmock.EmitWarning(255)
+             # Wait 2 seconds or until warning
+-            timeout = 2
+-            while timeout > 0 and self.last_warning != 255:
+-                time.sleep(0.5)
+-                timeout -= 0.5
+-                self.main_context.iteration(False)
+-            self.assertEqual(self.last_warning, 255)
++            self.assertEventually(self.last_warning == 255, "'255' low-memory warning not received", 20)
+ 
+ except ImportError as e:
+     @unittest.skip("Cannot import %s" % e.name)
+-- 
+GitLab
+
