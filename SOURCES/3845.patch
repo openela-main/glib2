@@ -1,0 +1,195 @@
+From 37e323f1d16720d662611866cde567b1d2a01d48 Mon Sep 17 00:00:00 2001
+From: Ondrej Holy <oholy@redhat.com>
+Date: Mon, 22 Jan 2024 15:29:37 +0100
+Subject: [PATCH 1/2] gunixmounts: Use libmnt_monitor API for monitoring
+
+The `GUnixMountMonitor` object implements monitoring on its own currently.
+Only the `/proc/mounts` file changes are monitored. It is not aware of the
+`/run/mount/utab` file changes. This file contains the userspace mount
+options (e.g. `x-gvfs-notrash`, `x-gvfs-hide`) among others. There is a
+problem when `/sbin/mount.<type>` (e.g. `mount.nfs`) helper programs are
+used. In that case, the `/run/mount/utab` file is updated later than the
+`/proc/mounts` file and thus the `GUnixMountMonitor` clients (e.g.
+`gvfs-udisks2-volume-monitor`, `gvfsd-trash`) don't see the userspace
+options until the next `mount-changed` signal. Let's use the `libmnt_monitor`
+API for monitoring instead and emit the `mount-changed` signal also when the
+`/run/mount/utab` file is changed.
+
+Related: https://issues.redhat.com/browse/RHEL-14607
+Related: https://github.com/util-linux/util-linux/pull/2607
+---
+ gio/gunixmounts.c | 72 ++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 71 insertions(+), 1 deletion(-)
+
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index 32b936259..e11b34a7d 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -202,6 +202,11 @@ static GSource *proc_mounts_watch_source;
+ #define endmntent(f) fclose(f)
+ #endif
+ 
++#ifdef HAVE_LIBMOUNT
++/* Protected by proc_mounts_source lock */
++static struct libmnt_monitor *proc_mounts_monitor = NULL;
++#endif
++
+ static gboolean
+ is_in (const char *value, const char *set[])
+ {
+@@ -1859,7 +1864,36 @@ proc_mounts_changed (GIOChannel   *channel,
+                      GIOCondition  cond,
+                      gpointer      user_data)
+ {
++  gboolean has_changed = FALSE;
++
++#ifdef HAVE_LIBMOUNT
++  if (cond & G_IO_IN)
++    {
++      G_LOCK (proc_mounts_source);
++      if (proc_mounts_monitor != NULL)
++        {
++          int ret;
++
++          /* The mnt_monitor_next_change function needs to be used to avoid false-positives. */
++          ret = mnt_monitor_next_change (proc_mounts_monitor, NULL, NULL);
++          if (ret == 0)
++            {
++              has_changed = TRUE;
++              ret = mnt_monitor_event_cleanup (proc_mounts_monitor);
++            }
++
++          if (ret < 0)
++            g_debug ("mnt_monitor_next_change failed: %s", g_strerror (-ret));
++        }
++      G_UNLOCK (proc_mounts_source);
++    }
++
++#else
+   if (cond & G_IO_ERR)
++    has_changed = TRUE;
++#endif
++
++  if (has_changed)
+     {
+       G_LOCK (proc_mounts_source);
+       mount_poller_time = (guint64) g_get_monotonic_time ();
+@@ -1924,6 +1958,10 @@ mount_monitor_stop (void)
+       g_source_destroy (proc_mounts_watch_source);
+       proc_mounts_watch_source = NULL;
+     }
++
++#ifdef HAVE_LIBMOUNT
++  g_clear_pointer (&proc_mounts_monitor, mnt_unref_monitor);
++#endif
+   G_UNLOCK (proc_mounts_source);
+ 
+   if (mtab_monitor)
+@@ -1965,9 +2003,37 @@ mount_monitor_start (void)
+        */
+       if (g_str_has_prefix (mtab_path, "/proc/"))
+         {
+-          GIOChannel *proc_mounts_channel;
++          GIOChannel *proc_mounts_channel = NULL;
+           GError *error = NULL;
++#ifdef HAVE_LIBMOUNT
++          int ret;
++
++          G_LOCK (proc_mounts_source);
++
++          proc_mounts_monitor = mnt_new_monitor ();
++          ret = mnt_monitor_enable_kernel (proc_mounts_monitor, TRUE);
++          if (ret < 0)
++            g_warning ("mnt_monitor_enable_kernel failed: %s", g_strerror (-ret));
++
++          ret = mnt_monitor_enable_userspace (proc_mounts_monitor, TRUE, NULL);
++          if (ret < 0)
++            g_warning ("mnt_monitor_enable_userspace failed: %s", g_strerror (-ret));
++
++          ret = mnt_monitor_get_fd (proc_mounts_monitor);
++          if (ret >= 0)
++            {
++              proc_mounts_channel = g_io_channel_unix_new (ret);
++            }
++          else
++            {
++              g_set_error_literal (&error, G_IO_ERROR, g_io_error_from_errno (-ret),
++                                   g_strerror (-ret));
++            }
++
++          G_UNLOCK (proc_mounts_source);
++#else
+           proc_mounts_channel = g_io_channel_new_file (mtab_path, "r", &error);
++#endif
+           if (proc_mounts_channel == NULL)
+             {
+               g_warning ("Error creating IO channel for %s: %s (%s, %d)", mtab_path,
+@@ -1978,7 +2044,11 @@ mount_monitor_start (void)
+             {
+               G_LOCK (proc_mounts_source);
+ 
++#ifdef HAVE_LIBMOUNT
++              proc_mounts_watch_source = g_io_create_watch (proc_mounts_channel, G_IO_IN);
++#else
+               proc_mounts_watch_source = g_io_create_watch (proc_mounts_channel, G_IO_ERR);
++#endif
+               mount_poller_time = (guint64) g_get_monotonic_time ();
+               g_source_set_callback (proc_mounts_watch_source,
+                                      (GSourceFunc) proc_mounts_changed,
+-- 
+2.43.0
+
+
+From bb7d6b8fcef36af5452071c8758f89955888469a Mon Sep 17 00:00:00 2001
+From: Ondrej Holy <oholy@redhat.com>
+Date: Wed, 31 Jan 2024 13:35:39 +0100
+Subject: [PATCH 2/2] gunixmounts: Use mnt_monitor_veil_kernel option
+
+The previous commit enabled the `/run/mount/utab` monitoring. The problem
+is that the `mount-changed` signal can be emitted twice for one mount. One
+for the `/proc/mounts` file change and another one for the `/run/media/utab`
+file change. This is still not ideal because e.g. the `GMount` objects for
+mounts with the `x-gvfs-hide` option are added and immediately removed.
+Let's enable the `mnt_monitor_veil_kernel` option to avoid this.
+
+Related: https://github.com/util-linux/util-linux/pull/2725
+---
+ gio/gunixmounts.c | 6 ++++++
+ meson.build       | 4 ++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index e11b34a7d..6abe87414 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -2019,6 +2019,12 @@ mount_monitor_start (void)
+           if (ret < 0)
+             g_warning ("mnt_monitor_enable_userspace failed: %s", g_strerror (-ret));
+ 
++#ifdef HAVE_MNT_MONITOR_VEIL_KERNEL
++          ret = mnt_monitor_veil_kernel (proc_mounts_monitor, TRUE);
++          if (ret < 0)
++            g_warning ("mnt_monitor_veil_kernel failed: %s", g_strerror (-ret));
++#endif
++
+           ret = mnt_monitor_get_fd (proc_mounts_monitor);
+           if (ret >= 0)
+             {
+diff --git a/meson.build b/meson.build
+index a0502fe69..159703557 100644
+--- a/meson.build
++++ b/meson.build
+@@ -2102,6 +2102,10 @@ libmount_dep = []
+ if host_system == 'linux'
+   libmount_dep = dependency('mount', version : '>=2.23', required : get_option('libmount'))
+   glib_conf.set('HAVE_LIBMOUNT', libmount_dep.found())
++
++  if libmount_dep.found() and cc.has_function('mnt_monitor_veil_kernel', dependencies: libmount_dep)
++    glib_conf.set('HAVE_MNT_MONITOR_VEIL_KERNEL', 1)
++  endif
+ endif
+ 
+ # gnutls is used optionally by GHmac
+-- 
+2.43.0
+

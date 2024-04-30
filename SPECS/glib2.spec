@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 11%{?dist}
+Release: 14%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -42,6 +42,17 @@ Patch: 3163.patch
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3272
 Patch: 2826.patch
 Patch: 3272.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2408
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2816
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/2847
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3158
+Patch: 2408.patch
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3353
+Patch: 3353.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3845
+Patch: 3845.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -258,6 +269,18 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Wed Feb 21 2024 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-14
+- Rebuild against newer util-linux for libmnt changes
+- Resolves: RHEL-23637
+
+* Thu Feb 01 2024 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-13
+- Backport GUnixMountMonitor port to libmnt_monitor
+- Resolves: RHEL-23637
+
+* Fri Nov 03 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-12
+- Fix race with waitpid() and child watcher sources
+- Resolves: RHEL-14761
+
 * Wed Jul 19 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-11
 - Really fix authentication failures when sd-bus clients connect to GDBus servers
 - Resolves: #2217771

@@ -1,0 +1,391 @@
+From 0bbd63bf1945c6f3e1c88232521e1618c21d44f2 Mon Sep 17 00:00:00 2001
+From: Philip Withnall <pwithnall@endlessos.org>
+Date: Thu, 23 Dec 2021 17:45:51 +0000
+Subject: [PATCH 1/4] gmain: Use waitid() on pidfds rather than a global
+ SIGCHLD handler
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When the system supports it (as all Linux kernels ≥ 5.3 should), it’s
+preferable to use `pidfd_open()` and `waitid()` to be notified of
+child processes exiting or being signalled, rather than installing a
+default `SIGCHLD` handler.
+
+A default `SIGCHLD` handler is global, and can never interact well with
+other code (from the application or other libraries) which also wants to
+install a `SIGCHLD` handler.
+
+This use of `pidfd_open()` is racy (the PID may be reused between
+`g_child_watch_source_new()` being called and `pidfd_open()` being
+called), so it doesn’t improve behaviour there. For that, we’d need
+continuous use of pidfds throughout GLib, from fork/spawn time until
+here. See #1866 for that.
+
+The use of `waitid()` to get the process exit status could be expanded
+in future to also work for stopped or continued processes (as per #175)
+by adding `WSTOPPED | WCONTINUED` into the flags. That’s a behaviour
+change which is outside the strict scope of adding pidfd support,
+though.
+
+Signed-off-by: Philip Withnall <pwithnall@endlessos.org>
+
+Helps: #1866
+Fixes: #2216
+---
+ glib/gmain.c | 117 ++++++++++++++++++++++++++++++++++++++++++++++++---
+ meson.build  |  14 ++++++
+ 2 files changed, 125 insertions(+), 6 deletions(-)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index 15581ee7a..e9965f7f6 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -67,6 +67,12 @@
+ #include <errno.h>
+ #include <string.h>
+ 
++#ifdef HAVE_PIDFD
++#include <sys/syscall.h>
++#include <sys/wait.h>
++#include <linux/wait.h>  /* P_PIDFD */
++#endif  /* HAVE_PIDFD */
++
+ #ifdef G_OS_WIN32
+ #define STRICT
+ #include <windows.h>
+@@ -329,10 +335,11 @@ struct _GChildWatchSource
+   GSource     source;
+   GPid        pid;
+   gint        child_status;
+-#ifdef G_OS_WIN32
++  /* @poll is always used on Windows, and used on Unix iff @using_pidfd is set: */
+   GPollFD     poll;
+-#else /* G_OS_WIN32 */
+-  gboolean    child_exited; /* (atomic) */
++#ifndef G_OS_WIN32
++  gboolean    child_exited; /* (atomic); not used iff @using_pidfd is set */
++  gboolean    using_pidfd;
+ #endif /* G_OS_WIN32 */
+ };
+ 
+@@ -5325,7 +5332,8 @@ dispatch_unix_signals_unlocked (void)
+         {
+           GChildWatchSource *source = node->data;
+ 
+-          if (!g_atomic_int_get (&source->child_exited))
++          if (!source->using_pidfd &&
++              !g_atomic_int_get (&source->child_exited))
+             {
+               pid_t pid;
+               do
+@@ -5384,6 +5392,38 @@ g_child_watch_prepare (GSource *source,
+   return g_atomic_int_get (&child_watch_source->child_exited);
+ }
+ 
++#ifdef HAVE_PIDFD
++static int
++siginfo_t_to_wait_status (const siginfo_t *info)
++{
++  /* Each of these returns is essentially the inverse of WIFEXITED(),
++   * WIFSIGNALED(), etc. */
++  switch (info->si_code)
++    {
++    case CLD_EXITED:
++      return W_EXITCODE (info->si_status, 0);
++    case CLD_KILLED:
++      return W_EXITCODE (0, info->si_status);
++    case CLD_DUMPED:
++#ifdef WCOREFLAG
++      return W_EXITCODE (0, info->si_status | WCOREFLAG);
++#else
++      g_assert_not_reached ();
++#endif
++    case CLD_CONTINUED:
++#ifdef __W_CONTINUED
++      return __W_CONTINUED;
++#else
++      g_assert_not_reached ();
++#endif
++    case CLD_STOPPED:
++    case CLD_TRAPPED:
++    default:
++      return W_STOPCODE (info->si_status);
++    }
++}
++#endif  /* HAVE_PIDFD */
++
+ static gboolean
+ g_child_watch_check (GSource *source)
+ {
+@@ -5391,6 +5431,34 @@ g_child_watch_check (GSource *source)
+ 
+   child_watch_source = (GChildWatchSource *) source;
+ 
++#ifdef HAVE_PIDFD
++  if (child_watch_source->using_pidfd)
++    {
++      gboolean child_exited = child_watch_source->poll.revents & G_IO_IN;
++
++      if (child_exited)
++        {
++          siginfo_t child_info = { 0, };
++
++          /* Get the exit status */
++          if (waitid (P_PIDFD, child_watch_source->poll.fd, &child_info, WEXITED | WNOHANG) >= 0 &&
++              child_info.si_pid != 0)
++            {
++              /* waitid() helpfully provides the wait status in a decomposed
++               * form which is quite useful. Unfortunately we have to report it
++               * to the #GChildWatchFunc as a waitpid()-style platform-specific
++               * wait status, so that the user code in #GChildWatchFunc can then
++               * call WIFEXITED() (etc.) on it. That means re-composing the
++               * status information. */
++              child_watch_source->child_status = siginfo_t_to_wait_status (&child_info);
++              child_watch_source->child_exited = TRUE;
++            }
++        }
++
++      return child_exited;
++    }
++#endif  /* HAVE_PIDFD */
++
+   return g_atomic_int_get (&child_watch_source->child_exited);
+ }
+ 
+@@ -5575,6 +5643,11 @@ g_unix_signal_watch_finalize (GSource    *source)
+ static void
+ g_child_watch_finalize (GSource *source)
+ {
++  GChildWatchSource *child_watch_source = (GChildWatchSource *) source;
++
++  if (child_watch_source->using_pidfd)
++    return;
++
+   G_LOCK (unix_signal_lock);
+   unix_child_watches = g_slist_remove (unix_child_watches, source);
+   unref_unix_signal_handler_unlocked (SIGCHLD);
+@@ -5676,6 +5749,9 @@ g_child_watch_source_new (GPid pid)
+ {
+   GSource *source;
+   GChildWatchSource *child_watch_source;
++#ifdef HAVE_PIDFD
++  int errsv;
++#endif
+ 
+ #ifndef G_OS_WIN32
+   g_return_val_if_fail (pid > 0, NULL);
+@@ -5694,14 +5770,43 @@ g_child_watch_source_new (GPid pid)
+   child_watch_source->poll.events = G_IO_IN;
+ 
+   g_source_add_poll (source, &child_watch_source->poll);
+-#else /* G_OS_WIN32 */
++#else /* !G_OS_WIN32 */
++
++#ifdef HAVE_PIDFD
++  /* Use a pidfd, if possible, to avoid having to install a global SIGCHLD
++   * handler and potentially competing with any other library/code which wants
++   * to install one.
++   *
++   * Unfortunately this use of pidfd isn’t race-free (the PID could be recycled
++   * between the caller calling g_child_watch_source_new() and here), but it’s
++   * better than SIGCHLD.
++   */
++  child_watch_source->poll.fd = (int) syscall (SYS_pidfd_open, pid, 0);
++  errsv = errno;
++
++  if (child_watch_source->poll.fd >= 0)
++    {
++      child_watch_source->using_pidfd = TRUE;
++      child_watch_source->poll.events = G_IO_IN;
++      g_source_add_poll (source, &child_watch_source->poll);
++
++      return source;
++    }
++  else
++    {
++      g_debug ("pidfd_open(%" G_PID_FORMAT ") failed with error: %s",
++               pid, g_strerror (errsv));
++      /* Fall through; likely the kernel isn’t new enough to support pidfd_open() */
++    }
++#endif  /* HAVE_PIDFD */
++
+   G_LOCK (unix_signal_lock);
+   ref_unix_signal_handler_unlocked (SIGCHLD);
+   unix_child_watches = g_slist_prepend (unix_child_watches, child_watch_source);
+   if (waitpid (pid, &child_watch_source->child_status, WNOHANG) > 0)
+     child_watch_source->child_exited = TRUE;
+   G_UNLOCK (unix_signal_lock);
+-#endif /* G_OS_WIN32 */
++#endif /* !G_OS_WIN32 */
+ 
+   return source;
+ }
+diff --git a/meson.build b/meson.build
+index a0223ce5b..1e1bd602c 100644
+--- a/meson.build
++++ b/meson.build
+@@ -810,6 +810,20 @@ if cc.links('''#include <sys/eventfd.h>
+   glib_conf.set('HAVE_EVENTFD', 1)
+ endif
+ 
++# Check for pidfd_open(2)
++if cc.links('''#include <sys/syscall.h>
++               #include <sys/wait.h>
++               #include <linux/wait.h>
++               #include <unistd.h>
++               int main (int argc, char ** argv) {
++                 siginfo_t child_info = { 0, };
++                 syscall (SYS_pidfd_open, 0, 0);
++                 waitid (P_PIDFD, 0, &child_info, WEXITED | WNOHANG);
++                 return 0;
++               }''', name : 'pidfd_open(2) system call')
++  glib_conf.set('HAVE_PIDFD', 1)
++endif
++
+ # Check for __uint128_t (gcc) by checking for 128-bit division
+ uint128_t_src = '''int main() {
+ static __uint128_t v1 = 100;
+-- 
+2.41.0
+
+
+From 13c62bc181c6da9f287b737f7a3238e0269b40b3 Mon Sep 17 00:00:00 2001
+From: Christian Hergert <chergert@redhat.com>
+Date: Tue, 2 Aug 2022 12:35:40 -0700
+Subject: [PATCH 2/4] gmain: close pidfd when finalizing GChildWatchSource
+
+A file-descriptor was created with the introduction of pidfd_getfd() but
+nothing is closing it when the source finalizes. The GChildWatchSource is
+the creator and consumer of this FD and therefore responsible for closing
+it on finalization.
+
+The pidfd leak was introduced in !2408.
+
+This fixes issues with Builder where anon_inode:[pidfd] exhaust the
+available FD limit for the process.
+
+Fixes #2708
+---
+ glib/gmain.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index e9965f7f6..3ceec61ee 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -5646,7 +5646,11 @@ g_child_watch_finalize (GSource *source)
+   GChildWatchSource *child_watch_source = (GChildWatchSource *) source;
+ 
+   if (child_watch_source->using_pidfd)
+-    return;
++    {
++      if (child_watch_source->poll.fd >= 0)
++        close (child_watch_source->poll.fd);
++      return;
++    }
+ 
+   G_LOCK (unix_signal_lock);
+   unix_child_watches = g_slist_remove (unix_child_watches, source);
+-- 
+2.41.0
+
+
+From 378c72cbe12767b8f6aedc19c7ca46c07aa1ca73 Mon Sep 17 00:00:00 2001
+From: Owen Rafferty <owen@owenrafferty.com>
+Date: Tue, 12 Jul 2022 20:03:56 -0500
+Subject: [PATCH 3/4] gmain: define non-posix symbols
+
+---
+ glib/gmain.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index 3ceec61ee..a2d7bb3ba 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -71,6 +71,12 @@
+ #include <sys/syscall.h>
+ #include <sys/wait.h>
+ #include <linux/wait.h>  /* P_PIDFD */
++#ifndef W_EXITCODE
++#define W_EXITCODE(ret, sig) ((ret) << 8 | (sig))
++#endif
++#ifndef W_STOPCODE
++#define W_STOPCODE(sig)      ((sig) << 8 | 0x7f)
++#endif
+ #endif  /* HAVE_PIDFD */
+ 
+ #ifdef G_OS_WIN32
+-- 
+2.41.0
+
+
+From aac37188ce26366bd86626700d49cee0cb121472 Mon Sep 17 00:00:00 2001
+From: Philip Withnall <pwithnall@endlessos.org>
+Date: Wed, 21 Dec 2022 12:11:46 +0000
+Subject: [PATCH 4/4] gmain: Define fallback values for siginfo_t constants for
+ musl
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+musl doesn’t define them itself, presumably because they’re not defined
+in POSIX. glibc does define them. Thankfully, the values used in glibc
+match the values used internally in other musl macros.
+
+Define the values as a fallback. As a result of this, we can get rid of
+the `g_assert_if_reached()` checks in `siginfo_t_to_wait_status()`.
+
+This should fix catching signals from a subprocess when built against
+musl.
+
+Signed-off-by: Philip Withnall <pwithnall@endlessos.org>
+
+Fixes: #2852
+---
+ glib/gmain.c | 18 ++++++++++--------
+ 1 file changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/glib/gmain.c b/glib/gmain.c
+index a2d7bb3ba..f0cf700c0 100644
+--- a/glib/gmain.c
++++ b/glib/gmain.c
+@@ -77,6 +77,16 @@
+ #ifndef W_STOPCODE
+ #define W_STOPCODE(sig)      ((sig) << 8 | 0x7f)
+ #endif
++#ifndef WCOREFLAG
++/* musl doesn’t define WCOREFLAG while glibc does. Unfortunately, there’s no way
++ * to detect we’re building against musl, so just define it and hope.
++ * See https://git.musl-libc.org/cgit/musl/tree/include/sys/wait.h#n51 */
++#define WCOREFLAG 0x80
++#endif
++#ifndef __W_CONTINUED
++/* Same as above, for musl */
++#define __W_CONTINUED 0xffff
++#endif
+ #endif  /* HAVE_PIDFD */
+ 
+ #ifdef G_OS_WIN32
+@@ -5411,17 +5421,9 @@ siginfo_t_to_wait_status (const siginfo_t *info)
+     case CLD_KILLED:
+       return W_EXITCODE (0, info->si_status);
+     case CLD_DUMPED:
+-#ifdef WCOREFLAG
+       return W_EXITCODE (0, info->si_status | WCOREFLAG);
+-#else
+-      g_assert_not_reached ();
+-#endif
+     case CLD_CONTINUED:
+-#ifdef __W_CONTINUED
+       return __W_CONTINUED;
+-#else
+-      g_assert_not_reached ();
+-#endif
+     case CLD_STOPPED:
+     case CLD_TRAPPED:
+     default:
+-- 
+2.41.0
+
