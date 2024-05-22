@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 161%{?dist}
+Release: 162%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -114,12 +114,16 @@ Patch19: gnetworkmonitornm.patch
 Patch20: 13.patch
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=2125184
-# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/1134.patch
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/1134
 Patch21: 1134.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/54
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/400
 Patch22: 54.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/1549
+# Also: https://gitlab.gnome.org/GNOME/glib/-/commit/d0821da5244fd08c756a5f84ec0d3063c72d1ac6
+Patch23: 1549.patch
 
 %description
 GLib is the low-level core library that forms the basis for projects
@@ -318,6 +322,10 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Thu Sep 21 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-162
+- Add support to ignore trash for certain mounts
+- Resolves: RHEL-2836
+
 * Tue Jan 03 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-161
 - Backport grefcount API
 - Resolves: #2153205

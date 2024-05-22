@@ -1,0 +1,401 @@
+From d0821da5244fd08c756a5f84ec0d3063c72d1ac6 Mon Sep 17 00:00:00 2001
+From: Ondrej Holy <oholy@redhat.com>
+Date: Thu, 26 Apr 2018 10:36:36 +0200
+Subject: [PATCH] gio: Add g_unix_mount_get_options
+
+GVfsUDisks2VolumeMonitor handles x-gvfs-hide/x-gvfs-show mount options
+used to overwrite our heuristics whether the mount should be shown, or
+hidden. Unfortunately, it works currently only for mounts with
+corresponding fstab entries, because the options are read over
+g_unix_mount_point_get_options. Let's introduce g_unix_mount_get_options
+to allow reading of the options for all sort of mounts (e.g. created
+over pam_mount, or manually mounted).
+
+(Minor fixes to the documentation by Philip Withnall
+<withnall@endlessm.com>.)
+
+https://bugzilla.gnome.org/show_bug.cgi?id=668132
+---
+ docs/reference/gio/gio-sections.txt |  1 +
+ gio/gunixmounts.c                   | 37 +++++++++++++++++++++++++++++
+ gio/gunixmounts.h                   |  2 ++
+ 3 files changed, 40 insertions(+)
+
+diff --git a/docs/reference/gio/gio-sections.txt b/docs/reference/gio/gio-sections.txt
+index 2eb7efc748..0a35f9541b 100644
+--- a/docs/reference/gio/gio-sections.txt
++++ b/docs/reference/gio/gio-sections.txt
+@@ -1546,6 +1546,7 @@ g_unix_mount_copy
+ g_unix_mount_get_mount_path
+ g_unix_mount_get_device_path
+ g_unix_mount_get_fs_type
++g_unix_mount_get_options
+ g_unix_mount_is_readonly
+ g_unix_mount_is_system_internal
+ g_unix_mount_guess_icon
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index c74b0cfaf4..f2db27e661 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -126,6 +126,7 @@ struct _GUnixMountEntry {
+   char *mount_path;
+   char *device_path;
+   char *filesystem_type;
++  char *options;
+   gboolean is_read_only;
+   gboolean is_system_internal;
+ };
+@@ -412,6 +413,7 @@ static GUnixMountEntry *
+ create_unix_mount_entry (const char *device_path,
+                          const char *mount_path,
+                          const char *filesystem_type,
++                         const char *options,
+                          gboolean    is_read_only)
+ {
+   GUnixMountEntry *mount_entry = NULL;
+@@ -420,6 +422,7 @@ create_unix_mount_entry (const char *device_path,
+   mount_entry->device_path = g_strdup (device_path);
+   mount_entry->mount_path = g_strdup (mount_path);
+   mount_entry->filesystem_type = g_strdup (filesystem_type);
++  mount_entry->options = g_strdup (options);
+   mount_entry->is_read_only = is_read_only;
+ 
+   mount_entry->is_system_internal =
+@@ -498,6 +501,7 @@ _g_get_unix_mounts (void)
+       mount_entry = create_unix_mount_entry (device_path,
+                                              mnt_fs_get_target (fs),
+                                              mnt_fs_get_fstype (fs),
++                                             mnt_fs_get_options (fs),
+                                              is_read_only);
+ 
+       return_list = g_list_prepend (return_list, mount_entry);
+@@ -592,6 +596,7 @@ _g_get_unix_mounts (void)
+       mount_entry = create_unix_mount_entry (device_path,
+                                              mntent->mnt_dir,
+                                              mntent->mnt_type,
++                                             mntent->mnt_opts,
+                                              is_read_only);
+ 
+       g_hash_table_insert (mounts_hash,
+@@ -705,6 +710,7 @@ _g_get_unix_mounts (void)
+       mount_entry = create_unix_mount_entry (mntent.mnt_special,
+                                              mntent.mnt_mountp,
+                                              mntent.mnt_fstype,
++                                             mntent.mnt_opts,
+                                              is_read_only);
+ 
+       return_list = g_list_prepend (return_list, mount_entry);
+@@ -771,6 +777,7 @@ _g_get_unix_mounts (void)
+       mount_entry = create_unix_mount_entry (vmt2dataptr (vmount_info, VMT_OBJECT),
+                                              vmt2dataptr (vmount_info, VMT_STUB),
+                                              fs_info == NULL ? "unknown" : fs_info->vfsent_name,
++                                             NULL,
+                                              is_read_only);
+ 
+       return_list = g_list_prepend (return_list, mount_entry);
+@@ -846,6 +853,7 @@ _g_get_unix_mounts (void)
+       mount_entry = create_unix_mount_entry (mntent[i].f_mntfromname,
+                                              mntent[i].f_mntonname,
+                                              mntent[i].f_fstypename,
++                                             NULL,
+                                              is_read_only);
+ 
+       return_list = g_list_prepend (return_list, mount_entry);
+@@ -1989,6 +1997,7 @@ g_unix_mount_free (GUnixMountEntry *mount_entry)
+   g_free (mount_entry->mount_path);
+   g_free (mount_entry->device_path);
+   g_free (mount_entry->filesystem_type);
++  g_free (mount_entry->options);
+   g_free (mount_entry);
+ }
+ 
+@@ -2013,6 +2022,7 @@ g_unix_mount_copy (GUnixMountEntry *mount_entry)
+   copy->mount_path = g_strdup (mount_entry->mount_path);
+   copy->device_path = g_strdup (mount_entry->device_path);
+   copy->filesystem_type = g_strdup (mount_entry->filesystem_type);
++  copy->options = g_strdup (mount_entry->options);
+   copy->is_read_only = mount_entry->is_read_only;
+   copy->is_system_internal = mount_entry->is_system_internal;
+ 
+@@ -2096,6 +2106,10 @@ g_unix_mount_compare (GUnixMountEntry *mount1,
+   if (res != 0)
+     return res;
+ 
++  res = g_strcmp0 (mount1->options, mount2->options);
++  if (res != 0)
++    return res;
++
+   res =  mount1->is_read_only - mount2->is_read_only;
+   if (res != 0)
+     return res;
+@@ -2151,6 +2165,29 @@ g_unix_mount_get_fs_type (GUnixMountEntry *mount_entry)
+   return mount_entry->filesystem_type;
+ }
+ 
++/**
++ * g_unix_mount_get_options:
++ * @mount_entry: a #GUnixMountEntry.
++ * 
++ * Gets a comma-separated list of mount options for the unix mount. For example,
++ * `rw,relatime,seclabel,data=ordered`.
++ * 
++ * This is similar to g_unix_mount_point_get_options(), but it takes
++ * a #GUnixMountEntry as an argument.
++ * 
++ * Returns: (nullable): a string containing the options, or %NULL if not
++ * available.
++ * 
++ * Since: 2.58
++ */
++const gchar *
++g_unix_mount_get_options (GUnixMountEntry *mount_entry)
++{
++  g_return_val_if_fail (mount_entry != NULL, NULL);
++
++  return mount_entry->options;
++}
++
+ /**
+  * g_unix_mount_is_readonly:
+  * @mount_entry: a #GUnixMount.
+diff --git a/gio/gunixmounts.h b/gio/gunixmounts.h
+index 04d6b0726b..a392d497f1 100644
+--- a/gio/gunixmounts.h
++++ b/gio/gunixmounts.h
+@@ -81,6 +81,8 @@ GLIB_AVAILABLE_IN_ALL
+ const char *   g_unix_mount_get_device_path         (GUnixMountEntry    *mount_entry);
+ GLIB_AVAILABLE_IN_ALL
+ const char *   g_unix_mount_get_fs_type             (GUnixMountEntry    *mount_entry);
++GLIB_AVAILABLE_IN_2_56
++const char *   g_unix_mount_get_options             (GUnixMountEntry    *mount_entry);
+ GLIB_AVAILABLE_IN_ALL
+ gboolean       g_unix_mount_is_readonly             (GUnixMountEntry    *mount_entry);
+ GLIB_AVAILABLE_IN_ALL
+-- 
+GitLab
+
+From 51ec01382137251e08948bbd860a5fbfde41e5ba Mon Sep 17 00:00:00 2001
+From: Ondrej Holy <oholy@redhat.com>
+Date: Tue, 23 Jun 2020 08:23:16 +0200
+Subject: [PATCH 1/2] gunixmounts: Add g_unix_mount_point_at
+
+There is already g_unix_mount_at function which allows to find certain
+unix mount for given mount path. It would be useful to have similar
+function for mount points, which will allow to replace custom codes in
+gvfs. Let's add g_unix_mount_point_at.
+---
+ docs/reference/gio/gio-sections.txt |  1 +
+ gio/gunixmounts.c                   | 46 +++++++++++++++++++++++++++++
+ gio/gunixmounts.h                   |  3 ++
+ 3 files changed, 50 insertions(+)
+
+diff --git a/docs/reference/gio/gio-sections.txt b/docs/reference/gio/gio-sections.txt
+index 2eb7efc74..5c9cbc34c 100644
+--- a/docs/reference/gio/gio-sections.txt
++++ b/docs/reference/gio/gio-sections.txt
+@@ -1568,6 +1568,7 @@ g_unix_mount_point_guess_symbolic_icon
+ g_unix_mount_point_guess_name
+ g_unix_mount_point_guess_can_eject
+ g_unix_mount_points_get
++g_unix_mount_point_at
+ g_unix_mounts_get
+ g_unix_mount_at
+ g_unix_mounts_changed_since
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index 4d19217ca..144da4d29 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -1596,6 +1596,52 @@ g_unix_mount_points_get (guint64 *time_read)
+   return _g_get_unix_mount_points ();
+ }
+ 
++/**
++ * g_unix_mount_point_at:
++ * @mount_path: (type filename): path for a possible unix mount point.
++ * @time_read: (out) (optional): guint64 to contain a timestamp.
++ *
++ * Gets a #GUnixMountPoint for a given mount path. If @time_read is set, it
++ * will be filled with a unix timestamp for checking if the mount points have
++ * changed since with g_unix_mount_points_changed_since().
++ *
++ * If more mount points have the same mount path, the last matching mount point
++ * is returned.
++ *
++ * Returns: (transfer full) (nullable): a #GUnixMountPoint, or %NULL if no match
++ * is found.
++ *
++ * Since: 2.66
++ **/
++GUnixMountPoint *
++g_unix_mount_point_at (const char *mount_path,
++                       guint64    *time_read)
++{
++  GList *mount_points, *l;
++  GUnixMountPoint *mount_point, *found;
++
++  mount_points = g_unix_mount_points_get (time_read);
++
++  found = NULL;
++  for (l = mount_points; l != NULL; l = l->next)
++    {
++      mount_point = l->data;
++
++      if (strcmp (mount_path, mount_point->mount_path) == 0)
++        {
++          if (found != NULL)
++            g_unix_mount_point_free (found);
++
++          found = mount_point;
++        }
++      else
++        g_unix_mount_point_free (mount_point);
++    }
++  g_list_free (mount_points);
++
++  return found;
++}
++
+ /**
+  * g_unix_mounts_changed_since:
+  * @time: guint64 to contain a timestamp.
+diff --git a/gio/gunixmounts.h b/gio/gunixmounts.h
+index 04d6b0726..ab9d3dbb9 100644
+--- a/gio/gunixmounts.h
++++ b/gio/gunixmounts.h
+@@ -128,6 +128,9 @@ GIcon *        g_unix_mount_point_guess_symbolic_icon (GUnixMountPoint    *mount
+ 
+ GLIB_AVAILABLE_IN_ALL
+ GList *        g_unix_mount_points_get              (guint64            *time_read);
++GLIB_AVAILABLE_IN_2_56
++GUnixMountPoint *g_unix_mount_point_at              (const char         *mount_path,
++                                                     guint64            *time_read);
+ GLIB_AVAILABLE_IN_ALL
+ GList *        g_unix_mounts_get                    (guint64            *time_read);
+ GLIB_AVAILABLE_IN_ALL
+-- 
+2.41.0
+
+From 6daee34fac29df6f182e7e2aa656e0b34bd916a5 Mon Sep 17 00:00:00 2001
+From: Ondrej Holy <oholy@redhat.com>
+Date: Tue, 23 Jun 2020 08:36:26 +0200
+Subject: [PATCH 2/2] gfile: Add support for x-gvfs-notrash option to ignore
+ mounts
+
+Add support for x-gvfs-notrash mount option, which allows to disable
+trash functionality for certain mounts. This might be especially useful
+e.g. to prevent trash folder creation on enterprise shares, which are
+also accessed from Windows...
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1096200
+---
+ gio/gfile.c      |  4 ++-
+ gio/glocalfile.c | 64 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 66 insertions(+), 2 deletions(-)
+
+diff --git a/gio/gfile.c b/gio/gfile.c
+index 447da3cfb..43c5c3d74 100644
+--- a/gio/gfile.c
++++ b/gio/gfile.c
+@@ -4166,7 +4166,9 @@ g_file_delete_finish (GFile         *file,
+  * Sends @file to the "Trashcan", if possible. This is similar to
+  * deleting it, but the user can recover it before emptying the trashcan.
+  * Not all file systems support trashing, so this call can return the
+- * %G_IO_ERROR_NOT_SUPPORTED error.
++ * %G_IO_ERROR_NOT_SUPPORTED error. Since GLib 2.66, the `x-gvfs-notrash` unix
++ * mount option can be used to disable g_file_trash() support for certain
++ * mounts, the %G_IO_ERROR_NOT_SUPPORTED error will be returned in that case.
+  *
+  * If @cancellable is not %NULL, then the operation can be cancelled by
+  * triggering the cancellable object from another thread. If the operation
+diff --git a/gio/glocalfile.c b/gio/glocalfile.c
+index e7481454e..cb0ecdafb 100644
+--- a/gio/glocalfile.c
++++ b/gio/glocalfile.c
+@@ -1858,6 +1858,52 @@ try_make_relative (const char *path,
+   return g_strdup (path);
+ }
+ 
++static gboolean
++ignore_trash_mount (GUnixMountEntry *mount)
++{
++  GUnixMountPoint *mount_point = NULL;
++  const gchar *mount_options;
++  gboolean retval = TRUE;
++
++  if (g_unix_mount_is_system_internal (mount))
++    return TRUE;
++
++  mount_options = g_unix_mount_get_options (mount);
++  if (mount_options == NULL)
++    {
++      mount_point = g_unix_mount_point_at (g_unix_mount_get_mount_path (mount),
++                                           NULL);
++      if (mount_point != NULL)
++        mount_options = g_unix_mount_point_get_options (mount_point);
++    }
++
++  if (mount_options == NULL ||
++      strstr (mount_options, "x-gvfs-notrash") == NULL)
++    retval = FALSE;
++
++  g_clear_pointer (&mount_point, g_unix_mount_point_free);
++
++  return retval;
++}
++
++static gboolean
++ignore_trash_path (const gchar *topdir)
++{
++  GUnixMountEntry *mount;
++  gboolean retval = TRUE;
++
++  mount = g_unix_mount_at (topdir, NULL);
++  if (mount == NULL)
++    goto out;
++
++  retval = ignore_trash_mount (mount);
++
++ out:
++  g_clear_pointer (&mount, g_unix_mount_free);
++
++  return retval;
++}
++
+ gboolean
+ _g_local_file_has_trash_dir (const char *dirname, dev_t dir_dev)
+ {
+@@ -1886,6 +1932,13 @@ _g_local_file_has_trash_dir (const char *dirname, dev_t dir_dev)
+   if (topdir == NULL)
+     return FALSE;
+ 
++  if (ignore_trash_path (topdir))
++    {
++      g_free (topdir);
++
++      return FALSE;
++    }
++
+   globaldir = g_build_filename (topdir, ".Trash", NULL);
+   if (g_lstat (globaldir, &global_stat) == 0 &&
+       S_ISDIR (global_stat.st_mode) &&
+@@ -2041,7 +2094,16 @@ g_local_file_trash (GFile         *file,
+                           file, G_IO_ERROR_NOT_SUPPORTED);
+ 	  return FALSE;
+ 	}
+-      
++
++      if (ignore_trash_path (topdir))
++        {
++          g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
++                       _("Trashing on system internal mounts is not supported"));
++          g_free (topdir);
++
++          return FALSE;
++        }
++
+       /* Try looking for global trash dir $topdir/.Trash/$uid */
+       globaldir = g_build_filename (topdir, ".Trash", NULL);
+       if (g_lstat (globaldir, &global_stat) == 0 &&
+-- 
+2.41.0
+
