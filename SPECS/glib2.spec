@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 162%{?dist}
+Release: 165%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -124,6 +124,9 @@ Patch22: 54.patch
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/1549
 # Also: https://gitlab.gnome.org/GNOME/glib/-/commit/d0821da5244fd08c756a5f84ec0d3063c72d1ac6
 Patch23: 1549.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4155
+Patch24: 4155.patch
 
 %description
 GLib is the low-level core library that forms the basis for projects
@@ -322,6 +325,19 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Thu Sep 26 2024 Ondrej Holy <oholy@redhat.com> - 2.56.4-165
+- Add support for x-gvfs-trash mount option
+- Resolves: RHEL-46828
+
+* Tue Feb 13 2024 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-164
+- Revert GUnixMountMonitor changes (it depends on functionality not in RHEL 8)
+- Resolves: RHEL-23636
+
+* Thu Feb 01 2024 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-163
+- Backport GUnixMountMonitor port to libmnt_monitor
+- Make GUnixMountMonitor thread-safe
+- Resolves: RHEL-23636
+
 * Thu Sep 21 2023 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-162
 - Add support to ignore trash for certain mounts
 - Resolves: RHEL-2836
