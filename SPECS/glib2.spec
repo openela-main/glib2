@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 14%{?dist}.1
+Release: 16%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -59,6 +59,9 @@ Patch: 3845.patch
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4053
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4057
 Patch: 4038.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4155
+Patch: 4155.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -275,9 +278,13 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
-* Mon May 13 2024 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-14.1
+* Thu Sep 26 2024 Ondrej Holy <oholy@redhat.com> - 2.68.4-16
+- Add support for x-gvfs-trash mount option
+- Resolves: RHEL-52360
+
+* Mon May 13 2024 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-15
 - Fix CVE-2024-34397, signal subscription vulnerabilities
-- Resolves: RHEL-56979
+- Resolves: RHEL-35775
 
 * Wed Feb 21 2024 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-14
 - Rebuild against newer util-linux for libmnt changes
