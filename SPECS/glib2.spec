@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 16%{?dist}
+Release: 16%{?dist}.2
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -62,6 +62,17 @@ Patch: 4038.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4155
 Patch: 4155.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4281
+Patch: CVE-2024-52533.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/680
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4588
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4592
+Patch: CVE-2025-4373.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4356
+Patch: gdatetime-test.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -278,6 +289,12 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Fri Jul 11 2025 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-16.2
+- Add patches for CVE-2024-52533 and CVE-2025-4373
+- Update GDateTime test for new tzdata
+- Resolves: RHEL-94290
+- Resolves: RHEL-102845
+
 * Thu Sep 26 2024 Ondrej Holy <oholy@redhat.com> - 2.68.4-16
 - Add support for x-gvfs-trash mount option
 - Resolves: RHEL-52360
