@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 165%{?dist}
+Release: 166%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -127,6 +127,25 @@ Patch23: 1549.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4155
 Patch24: 4155.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4281
+Patch25: CVE-2024-52533.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4588
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4592
+Patch26: CVE-2025-4373.patch
+
+# Contains commits from:
+#  https://gitlab.gnome.org/GNOME/glib/-/merge_requests/1121
+#  https://gitlab.gnome.org/GNOME/glib/-/merge_requests/3291
+Patch27: gdbus-conflict-reduction.patch
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/1332
+Patch28: gdbus-signal-race.patch
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4038
+Patch29: CVE-2024-34397.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4356
+Patch30: gdatetime-test.patch
 
 %description
 GLib is the low-level core library that forms the basis for projects
@@ -325,6 +344,13 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Fri Jul 11 2025 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-166
+- Add patches for CVE-2024-34397, CVE-2024-52533, CVE-2025-4373
+- Update GDateTime test for new tzdata
+- Resolves: RHEL-67084
+- Resolves: RHEL-94286
+- Resolves: RHEL-94848
+
 * Thu Sep 26 2024 Ondrej Holy <oholy@redhat.com> - 2.56.4-165
 - Add support for x-gvfs-trash mount option
 - Resolves: RHEL-46828
