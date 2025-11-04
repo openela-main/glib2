@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 16%{?dist}.2
+Release: 16%{?dist}.3
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -73,6 +73,7 @@ Patch: CVE-2025-4373.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4356
 Patch: gdatetime-test.patch
+Patch: RHEL-114058.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -289,6 +290,10 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Mon Sep 29 2025 RHEL Packaging Agent <jotnar@redhat.com> - 2.68.4-16.3
+- gdbusconnection: Prevent sending a serial of zero on overflow
+- Resolves: RHEL-114058
+
 * Fri Jul 11 2025 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-16.2
 - Add patches for CVE-2024-52533 and CVE-2025-4373
 - Update GDateTime test for new tzdata
