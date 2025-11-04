@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 166%{?dist}
+Release: 167%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -146,6 +146,9 @@ Patch29: CVE-2024-34397.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4356
 Patch30: gdatetime-test.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4470
+Patch31: RHEL-114086.patch
 
 %description
 GLib is the low-level core library that forms the basis for projects
@@ -344,6 +347,10 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Wed Sep 17 2025 RHEL Packaging Agent <jotnar@redhat.com> - 2.56.4-167
+- gdbusconnection: Prevent sending a serial of zero on overflow
+- Resolves: RHEL-114086
+
 * Fri Jul 11 2025 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-166
 - Add patches for CVE-2024-34397, CVE-2024-52533, CVE-2025-4373
 - Update GDateTime test for new tzdata
