@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 16%{?dist}.3
+Release: 18%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -66,14 +66,13 @@ Patch: 4155.patch
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4281
 Patch: CVE-2024-52533.patch
 
-# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/680
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4588
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4592
 Patch: CVE-2025-4373.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4356
 Patch: gdatetime-test.patch
-Patch: RHEL-114058.patch
+Patch: RHEL-114059.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -290,15 +289,15 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
-* Mon Sep 29 2025 RHEL Packaging Agent <jotnar@redhat.com> - 2.68.4-16.3
+* Wed Sep 17 2025 RHEL Packaging Agent <jotnar@redhat.com> - 2.68.4-18
 - gdbusconnection: Prevent sending a serial of zero on overflow
-- Resolves: RHEL-114058
+- Resolves: RHEL-114059
 
-* Fri Jul 11 2025 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-16.2
+* Fri Jul 11 2025 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-17
 - Add patches for CVE-2024-52533 and CVE-2025-4373
 - Update GDateTime test for new tzdata
-- Resolves: RHEL-94290
-- Resolves: RHEL-102845
+- Resolves: RHEL-94483
+- Resolves: RHEL-102844
 
 * Thu Sep 26 2024 Ondrej Holy <oholy@redhat.com> - 2.68.4-16
 - Add support for x-gvfs-trash mount option

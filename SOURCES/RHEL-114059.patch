@@ -1,4 +1,4 @@
-From d4bbbb4e89ad5190eeaa38c7b7371aa3bce0fa0c Mon Sep 17 00:00:00 2001
+From 95f006a2d14fcc41c0b1823d07e2b8b871195548 Mon Sep 17 00:00:00 2001
 From: Philip Withnall <pwithnall@gnome.org>
 Date: Mon, 3 Feb 2025 18:27:21 +0000
 Subject: [PATCH] gdbusconnection: Prevent sending a serial of zero on overflow
