@@ -1,4 +1,4 @@
-From 2ab35fea012dfd55858aaf7663698be069a202c5 Mon Sep 17 00:00:00 2001
+From b94b44407a088e6e8278d9db8b59fb377e84bda4 Mon Sep 17 00:00:00 2001
 From: Philip Withnall <pwithnall@gnome.org>
 Date: Mon, 3 Feb 2025 18:27:21 +0000
 Subject: [PATCH] gdbusconnection: Prevent sending a serial of zero on overflow
@@ -37,10 +37,10 @@ Fixes: #3592
  1 file changed, 15 insertions(+), 2 deletions(-)
 
 diff --git a/gio/gdbusconnection.c b/gio/gdbusconnection.c
-index 4c1d2e2..75f9b3b 100644
+index 1f6ca5745e..75371dca07 100644
 --- a/gio/gdbusconnection.c
 +++ b/gio/gdbusconnection.c
-@@ -1762,9 +1762,22 @@ g_dbus_connection_send_message_unlocked (GDBusConnection   *connection,
+@@ -1763,9 +1763,22 @@ g_dbus_connection_send_message_unlocked (GDBusConnection   *connection,
      return FALSE;
  
    if (flags & G_DBUS_SEND_MESSAGE_FLAGS_PRESERVE_SERIAL)
@@ -66,5 +66,5 @@ index 4c1d2e2..75f9b3b 100644
    switch (blob[0])
      {
 -- 
-2.47.3
+GitLab
 
