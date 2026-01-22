@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 167%{?dist}
+Release: 168%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -33,6 +33,9 @@ BuildRequires: pkgconfig(zlib)
 BuildRequires: automake autoconf libtool
 BuildRequires: gtk-doc
 BuildRequires: python3-devel
+# For testsuite
+BuildRequires: desktop-file-utils
+BuildRequires: shared-mime-info
 
 # for GIO content-type support
 Recommends: shared-mime-info
@@ -148,7 +151,16 @@ Patch29: CVE-2024-34397.patch
 Patch30: gdatetime-test.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4470
-Patch31: RHEL-114086.patch
+Patch31: gdbusconnection-serial-number-overflow.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4914
+Patch32: CVE-2025-13601.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4916
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4918
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4930
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4931
+Patch33: gunixmount-improvements.patch
 
 %description
 GLib is the low-level core library that forms the basis for projects
@@ -264,6 +276,9 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %transfiletriggerpostun -- %{_datadir}/glib-2.0/schemas
 glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 
+%check
+make %{?_smp_mflags} check
+
 %files -f glib20.lang
 %license COPYING
 %doc AUTHORS NEWS README
@@ -347,6 +362,11 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Tue Jan 20 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-168
+- Add patch for CVE-2025-13601
+- Fix GUnixMount issues
+- Enable testsuite during RPM check phase
+
 * Wed Sep 17 2025 RHEL Packaging Agent <jotnar@redhat.com> - 2.56.4-167
 - gdbusconnection: Prevent sending a serial of zero on overflow
 - Resolves: RHEL-114086
