@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 18%{?dist}
+Release: 18%{?dist}.1
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -72,7 +72,12 @@ Patch: CVE-2025-4373.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4356
 Patch: gdatetime-test.patch
-Patch: RHEL-114059.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4470
+Patch: gdbusconnection-serial-number-overflow.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4914
+Patch: CVE-2025-13601.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -289,6 +294,9 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Mon Jan 19 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-18.1
+- Add patch for CVE-2025-13601
+
 * Wed Sep 17 2025 RHEL Packaging Agent <jotnar@redhat.com> - 2.68.4-18
 - gdbusconnection: Prevent sending a serial of zero on overflow
 - Resolves: RHEL-114059
