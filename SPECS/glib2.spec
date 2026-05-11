@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 168%{?dist}
+Release: 169%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -161,6 +161,13 @@ Patch32: CVE-2025-13601.patch
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4930
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4931
 Patch33: gunixmount-improvements.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4933
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4921
+Patch34: CVE-2025-14087.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4935
+Patch35: CVE-2025-14512.patch
 
 %description
 GLib is the low-level core library that forms the basis for projects
@@ -362,6 +369,9 @@ make %{?_smp_mflags} check
 %{_datadir}/installed-tests
 
 %changelog
+* Fri Apr 24 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-169
+- Add patch for CVE-2025-14087 and CVE-2025-14512
+
 * Tue Jan 20 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.56.4-168
 - Add patch for CVE-2025-13601
 - Fix GUnixMount issues
