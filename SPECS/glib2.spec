@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 18%{?dist}.1
+Release: 18%{?dist}.2
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -78,6 +78,13 @@ Patch: gdbusconnection-serial-number-overflow.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4914
 Patch: CVE-2025-13601.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4933
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4921
+Patch:          CVE-2025-14087.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4935
+Patch:          CVE-2025-14512.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -294,6 +301,9 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Fri Apr 24 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-18.2
+- Add patch for CVE-2025-14087 and CVE-2025-14512
+
 * Mon Jan 19 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-18.1
 - Add patch for CVE-2025-13601
 
