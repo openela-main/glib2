@@ -1,0 +1,510 @@
+From 704d650e4d43d8d563358fd75d80a5d97ce91127 Mon Sep 17 00:00:00 2001
+From: Christian Hergert <chergert@redhat.com>
+Date: Fri, 21 Nov 2025 12:31:13 -0800
+Subject: [PATCH 1/5] gio/gunixmounts: mark some file-system types as system
+
+Since this list was originally created, more file system types have
+become commonly used and would benefit from being marked as a system
+file-system type.
+
+This was found while tracking down some performance issues in
+gnome-settings-daemon trash handling.
+---
+ gio/gunixmounts.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index 6abe87414..67bf3d36d 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -319,6 +319,8 @@ g_unix_is_system_fs_type (const char *fs_type)
+     "auto",
+     "autofs",
+     "autofs4",
++    "binfmt_misc",
++    "bpf",
+     "cgroup",
+     "configfs",
+     "cxfs",
+@@ -327,6 +329,7 @@ g_unix_is_system_fs_type (const char *fs_type)
+     "devpts",
+     "devtmpfs",
+     "ecryptfs",
++    "efivarfs",
+     "fdescfs",
+     "fusectl",
+     "gfs",
+@@ -355,6 +358,7 @@ g_unix_is_system_fs_type (const char *fs_type)
+     "selinuxfs",
+     "sysfs",
+     "tmpfs",
++    "tracefs",
+     "usbfs",
+     NULL
+   };
+-- 
+2.52.0
+
+
+From d01e214e82774f25dde3523ca23ca09b8ab563f9 Mon Sep 17 00:00:00 2001
+From: Ondrej Holy <oholy@redhat.com>
+Date: Mon, 1 Dec 2025 15:36:02 +0100
+Subject: [PATCH 2/5] gio/gunixmounts: Mark more file systems as system
+ internal
+
+The commit f1a90a67 updated list of system internal file systems.
+I think we can add a few more file systems (i.e. `cgroups2`,
+`fuse.gvfsd-fuse`, `fuse.portal`) and `/bin/efi` path. This is to
+improve performance of `gvfsd-trash`, `gsd-houskeeping` and similar.
+
+Related: https://gitlab.gnome.org/GNOME/gvfs/-/issues/814
+---
+ gio/gunixmounts.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index 67bf3d36d..2229e26f5 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -240,6 +240,7 @@ g_unix_is_mount_path_system_internal (const char *mount_path)
+      */
+     "/",              /* we already have "Filesystem root" in Nautilus */ 
+     "/bin",
++    "/bin/efi",
+     "/boot",
+     "/compat/linux/proc",
+     "/compat/linux/sys",
+@@ -322,6 +323,7 @@ g_unix_is_system_fs_type (const char *fs_type)
+     "binfmt_misc",
+     "bpf",
+     "cgroup",
++    "cgroup2",
+     "configfs",
+     "cxfs",
+     "debugfs",
+@@ -331,6 +333,8 @@ g_unix_is_system_fs_type (const char *fs_type)
+     "ecryptfs",
+     "efivarfs",
+     "fdescfs",
++    "fuse.gvfsd-fuse",
++    "fuse.portal",
+     "fusectl",
+     "gfs",
+     "gfs2",
+-- 
+2.52.0
+
+
+From 2178d97df4c797e535211410cde4b2d184e77113 Mon Sep 17 00:00:00 2001
+From: Ondrej Holy <oholy@redhat.com>
+Date: Wed, 3 Dec 2025 10:02:15 +0100
+Subject: [PATCH 3/5] gio/gunixmounts: Replace /bin/efi with /boot/efi
+
+The commit 06e9f2c0 added `/bin/efi` instead of `/boot/efi` to the
+list of system internal mount paths by mistake. Let's fix it.
+---
+ gio/gunixmounts.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index 2229e26f5..b43382981 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -240,8 +240,8 @@ g_unix_is_mount_path_system_internal (const char *mount_path)
+      */
+     "/",              /* we already have "Filesystem root" in Nautilus */ 
+     "/bin",
+-    "/bin/efi",
+     "/boot",
++    "/boot/efi",
+     "/compat/linux/proc",
+     "/compat/linux/sys",
+     "/dev",
+-- 
+2.52.0
+
+
+From e50947c3d432b823a164f2712ec00b0f0919d957 Mon Sep 17 00:00:00 2001
+From: Christian Hergert <chergert@redhat.com>
+Date: Fri, 21 Nov 2025 18:54:33 -0800
+Subject: [PATCH 4/5] gio/unixmounts: use bsearch() to check for set inclusion
+
+This turns out to be about 17% faster than the previous set comparisons
+on large (in the thousands) /proc/mounts configurations. It does require
+that we keep the lists sorted but ended up faster than gperf hashing.
+---
+ gio/gunixmounts.c | 59 +++++++++++++++++++++++++----------------------
+ 1 file changed, 31 insertions(+), 28 deletions(-)
+
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index b43382981..d659e9fb5 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -39,6 +39,7 @@
+ #include <unistd.h>
+ #include <sys/time.h>
+ #include <errno.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <signal.h>
+ #include <gstdio.h>
+@@ -207,16 +208,17 @@ static GSource *proc_mounts_watch_source;
+ static struct libmnt_monitor *proc_mounts_monitor = NULL;
+ #endif
+ 
++static int
++compare_str (const char * key,
++             const char * const *element)
++{
++  return strcmp (key, *element);
++}
++
+ static gboolean
+-is_in (const char *value, const char *set[])
++is_in (const char *value, const char *set[], gsize set_size)
+ {
+-  int i;
+-  for (i = 0; set[i] != NULL; i++)
+-    {
+-      if (strcmp (set[i], value) == 0)
+-	return TRUE;
+-    }
+-  return FALSE;
++  return bsearch (value, set, set_size, sizeof (char *), (GCompareFunc)compare_str) != NULL;
+ }
+ 
+ /**
+@@ -234,11 +236,12 @@ is_in (const char *value, const char *set[])
+ gboolean
+ g_unix_is_mount_path_system_internal (const char *mount_path)
+ {
++  /* keep sorted for bsearch */
+   const char *ignore_mountpoints[] = {
+     /* Includes all FHS 2.3 toplevel dirs and other specialized
+      * directories that we want to hide from the user.
+      */
+-    "/",              /* we already have "Filesystem root" in Nautilus */ 
++    "/",              /* we already have "Filesystem root" in Nautilus */
+     "/bin",
+     "/boot",
+     "/boot/efi",
+@@ -254,11 +257,15 @@ g_unix_is_mount_path_system_internal (const char *mount_path)
+     "/live/image",
+     "/media",
+     "/mnt",
++    "/net",
+     "/opt",
++    "/proc",
+     "/rescue",
+     "/root",
+     "/sbin",
++    "/sbin",
+     "/srv",
++    "/sys",
+     "/tmp",
+     "/usr",
+     "/usr/X11R6",
+@@ -275,16 +282,16 @@ g_unix_is_mount_path_system_internal (const char *mount_path)
+     "/var/mail",
+     "/var/run",
+     "/var/tmp",       /* https://bugzilla.redhat.com/show_bug.cgi?id=335241 */
+-    "/proc",
+-    "/sbin",
+-    "/net",
+-    "/sys",
+-    NULL
+   };
+ 
+-  if (is_in (mount_path, ignore_mountpoints))
++  if (is_in (mount_path, ignore_mountpoints, G_N_ELEMENTS (ignore_mountpoints)))
+     return TRUE;
+-  
++
++  /* Kept separate from sorted list as they may vary */
++  if (g_str_equal ("/var", mount_path) ||
++      g_str_equal ("/run", mount_path))
++    return TRUE;
++
+   if (g_str_has_prefix (mount_path, "/dev/") ||
+       g_str_has_prefix (mount_path, "/proc/") ||
+       g_str_has_prefix (mount_path, "/sys/"))
+@@ -314,14 +321,13 @@ g_unix_is_mount_path_system_internal (const char *mount_path)
+ gboolean
+ g_unix_is_system_fs_type (const char *fs_type)
+ {
++  /* keep sorted for bsearch */
+   const char *ignore_fs[] = {
+     "adfs",
+     "afs",
+     "auto",
+     "autofs",
+     "autofs4",
+-    "binfmt_misc",
+-    "bpf",
+     "cgroup",
+     "cgroup2",
+     "configfs",
+@@ -331,7 +337,6 @@ g_unix_is_system_fs_type (const char *fs_type)
+     "devpts",
+     "devtmpfs",
+     "ecryptfs",
+-    "efivarfs",
+     "fdescfs",
+     "fuse.gvfsd-fuse",
+     "fuse.portal",
+@@ -362,14 +367,12 @@ g_unix_is_system_fs_type (const char *fs_type)
+     "selinuxfs",
+     "sysfs",
+     "tmpfs",
+-    "tracefs",
+     "usbfs",
+-    NULL
+   };
+ 
+   g_return_val_if_fail (fs_type != NULL && *fs_type != '\0', FALSE);
+ 
+-  return is_in (fs_type, ignore_fs);
++  return is_in (fs_type, ignore_fs, G_N_ELEMENTS (ignore_fs));
+ }
+ 
+ /**
+@@ -391,19 +394,19 @@ g_unix_is_system_fs_type (const char *fs_type)
+ gboolean
+ g_unix_is_system_device_path (const char *device_path)
+ {
++  /* keep sorted for bsearch */
+   const char *ignore_devices[] = {
+-    "none",
+-    "sunrpc",
+-    "devpts",
+-    "nfsd",
+     "/dev/loop",
+     "/dev/vn",
+-    NULL
++    "devpts",
++    "nfsd",
++    "none",
++    "sunrpc",
+   };
+ 
+   g_return_val_if_fail (device_path != NULL && *device_path != '\0', FALSE);
+ 
+-  return is_in (device_path, ignore_devices);
++  return is_in (device_path, ignore_devices, G_N_ELEMENTS (ignore_devices));
+ }
+ 
+ static gboolean
+-- 
+2.52.0
+
+
+From dcc5d5e1ac3c8c80a5d7358c9162645614e9fe85 Mon Sep 17 00:00:00 2001
+From: Christian Hergert <chergert@gnome.org>
+Date: Tue, 6 Jan 2026 10:56:59 -0800
+Subject: [PATCH 5/5] gio/unixmounts: test that mounts are in sorted order
+
+---
+ gio/gunixmounts-private.h | 69 +++++++++++++++++++++++++++++++++++++++
+ gio/gunixmounts.c         | 51 ++---------------------------
+ gio/tests/unix-mounts.c   | 26 +++++++++++++++
+ 3 files changed, 97 insertions(+), 49 deletions(-)
+ create mode 100644 gio/gunixmounts-private.h
+
+diff --git a/gio/gunixmounts-private.h b/gio/gunixmounts-private.h
+new file mode 100644
+index 000000000..196e81aca
+--- /dev/null
++++ b/gio/gunixmounts-private.h
+@@ -0,0 +1,69 @@
++/* GIO - GLib Input, Output and Streaming Library
++ *
++ * Copyright 2006-2007 Red Hat, Inc.
++ * Copyright 2026 Christian Hergert
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General
++ * Public License along with this library; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#pragma once
++
++/* keep sorted for bsearch */
++static const char *system_mount_paths[] = {
++  /* Includes all FHS 2.3 toplevel dirs and other specialized
++   * directories that we want to hide from the user.
++   */
++  "/",              /* we already have "Filesystem root" in Nautilus */
++  "/bin",
++  "/boot",
++  "/compat/linux/proc",
++  "/compat/linux/sys",
++  "/dev",
++  "/etc",
++  "/home",
++  "/lib",
++  "/lib64",
++  "/libexec",
++  "/live/cow",
++  "/live/image",
++  "/media",
++  "/mnt",
++  "/net",
++  "/opt",
++  "/proc",
++  "/rescue",
++  "/root",
++  "/sbin",
++  "/sbin",
++  "/srv",
++  "/sys",
++  "/tmp",
++  "/usr",
++  "/usr/X11R6",
++  "/usr/local",
++  "/usr/obj",
++  "/usr/ports",
++  "/usr/src",
++  "/usr/xobj",
++  "/var",
++  "/var/crash",
++  "/var/local",
++  "/var/log",
++  "/var/log/audit", /* https://bugzilla.redhat.com/show_bug.cgi?id=333041 */
++  "/var/mail",
++  "/var/run",
++  "/var/tmp",       /* https://bugzilla.redhat.com/show_bug.cgi?id=335241 */
++};
+diff --git a/gio/gunixmounts.c b/gio/gunixmounts.c
+index d659e9fb5..0ddecf966 100644
+--- a/gio/gunixmounts.c
++++ b/gio/gunixmounts.c
+@@ -65,6 +65,7 @@
+ #endif
+ 
+ #include "gunixmounts.h"
++#include "gunixmounts-private.h"
+ #include "gfile.h"
+ #include "gfilemonitor.h"
+ #include "glibintl.h"
+@@ -236,55 +237,7 @@ is_in (const char *value, const char *set[], gsize set_size)
+ gboolean
+ g_unix_is_mount_path_system_internal (const char *mount_path)
+ {
+-  /* keep sorted for bsearch */
+-  const char *ignore_mountpoints[] = {
+-    /* Includes all FHS 2.3 toplevel dirs and other specialized
+-     * directories that we want to hide from the user.
+-     */
+-    "/",              /* we already have "Filesystem root" in Nautilus */
+-    "/bin",
+-    "/boot",
+-    "/boot/efi",
+-    "/compat/linux/proc",
+-    "/compat/linux/sys",
+-    "/dev",
+-    "/etc",
+-    "/home",
+-    "/lib",
+-    "/lib64",
+-    "/libexec",
+-    "/live/cow",
+-    "/live/image",
+-    "/media",
+-    "/mnt",
+-    "/net",
+-    "/opt",
+-    "/proc",
+-    "/rescue",
+-    "/root",
+-    "/sbin",
+-    "/sbin",
+-    "/srv",
+-    "/sys",
+-    "/tmp",
+-    "/usr",
+-    "/usr/X11R6",
+-    "/usr/local",
+-    "/usr/obj",
+-    "/usr/ports",
+-    "/usr/src",
+-    "/usr/xobj",
+-    "/var",
+-    "/var/crash",
+-    "/var/local",
+-    "/var/log",
+-    "/var/log/audit", /* https://bugzilla.redhat.com/show_bug.cgi?id=333041 */
+-    "/var/mail",
+-    "/var/run",
+-    "/var/tmp",       /* https://bugzilla.redhat.com/show_bug.cgi?id=335241 */
+-  };
+-
+-  if (is_in (mount_path, ignore_mountpoints, G_N_ELEMENTS (ignore_mountpoints)))
++  if (is_in (mount_path, system_mount_paths, G_N_ELEMENTS (system_mount_paths)))
+     return TRUE;
+ 
+   /* Kept separate from sorted list as they may vary */
+diff --git a/gio/tests/unix-mounts.c b/gio/tests/unix-mounts.c
+index 67b8c8d98..ab4aaa23e 100644
+--- a/gio/tests/unix-mounts.c
++++ b/gio/tests/unix-mounts.c
+@@ -28,6 +28,8 @@
+ #include <gio/gio.h>
+ #include <gio/gunixmounts.h>
+ 
++#include "../gunixmounts-private.h"
++
+ static void
+ test_is_system_fs_type (void)
+ {
+@@ -48,6 +50,29 @@ test_is_system_device_path (void)
+   g_assert_false (g_unix_is_system_device_path ("/"));
+ }
+ 
++static void
++test_system_mount_paths_sorted (void)
++{
++  size_t i;
++  size_t n_paths = G_N_ELEMENTS (system_mount_paths);
++
++  g_test_summary ("Verify that system_mount_paths array is sorted for bsearch");
++
++  for (i = 1; i < n_paths; i++)
++    {
++      int cmp = strcmp (system_mount_paths[i - 1], system_mount_paths[i]);
++      if (cmp > 0)
++        {
++          g_fprintf (stderr, "system_mount_paths array is not sorted: "
++                              "\"%s\" should come before \"%s\"",
++                              system_mount_paths[i - 1],
++                              system_mount_paths[i]);
++          g_test_fail ();
++          return;
++        }
++    }
++}
++
+ int
+ main (int   argc,
+       char *argv[])
+@@ -58,6 +83,7 @@ main (int   argc,
+ 
+   g_test_add_func ("/unix-mounts/is-system-fs-type", test_is_system_fs_type);
+   g_test_add_func ("/unix-mounts/is-system-device-path", test_is_system_device_path);
++  g_test_add_func ("/unix-mounts/system-mount-paths-sorted", test_system_mount_paths_sorted);
+ 
+   return g_test_run ();
+ }
+-- 
+2.52.0
+
