@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 169%{?dist}
+Release: 170%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -168,6 +168,9 @@ Patch34: CVE-2025-14087.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4935
 Patch35: CVE-2025-14512.patch
+
+# https://github.com/GNOME/glib/commit/c9da977c178fbfc0e4caf99f9fdf5dc433d6fcc2
+Patch36: CVE-2026-58016.patch
 
 %description
 GLib is the low-level core library that forms the basis for projects
@@ -369,6 +372,10 @@ make %{?_smp_mflags} check
 %{_datadir}/installed-tests
 
 %changelog
+* Thu Jul 09 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-170
+- Add patch for CVE-2026-58016
+- Resolves: RHEL-190622
+
 * Fri Apr 24 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-169
 - Add patch for CVE-2025-14087 and CVE-2025-14512
 
