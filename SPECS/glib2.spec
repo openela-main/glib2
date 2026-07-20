@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 19%{?dist}.1
+Release: 19%{?dist}.2
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -91,6 +91,9 @@ Patch:          CVE-2025-14087.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4935
 Patch:          CVE-2025-14512.patch
+
+# https://github.com/GNOME/glib/commit/c9da977c178fbfc0e4caf99f9fdf5dc433d6fcc2
+Patch:          CVE-2026-58016.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -307,6 +310,11 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Thu Jul 09 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.2
+- Fix CVE-2026-58016: broken node element nesting validation in
+  D-Bus introspection XML parsing
+- Resolves: RHEL-190632
+
 * Fri Apr 24 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-19.1
 - Add patch for CVE-2025-14087 and CVE-2025-14512
 
