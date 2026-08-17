@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 19%{?dist}.2
+Release: 19%{?dist}.9
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -94,6 +94,27 @@ Patch:          CVE-2025-14512.patch
 
 # https://github.com/GNOME/glib/commit/c9da977c178fbfc0e4caf99f9fdf5dc433d6fcc2
 Patch:          CVE-2026-58016.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/8b72ad09c874ddff122b3e67b3470c5e2eab7690
+Patch:          CVE-2026-58015.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/5f6d86b50bebf5458ab1becf4de2c5e5f066122b
+Patch:          CVE-2026-58014.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/9f557746c52ae2a62fd5929f532b77024a18abe2
+Patch:          CVE-2026-58013.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5131
+Patch:          CVE-2026-58011.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5132
+Patch:          CVE-2026-58012.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/8338414f6560216efe67d3cbf549e32f8630252a
+Patch:          CVE-2026-58010.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/407349aa255a5c2b49caa52847aca1b8311c98b2
+Patch:          CVE-2026-15588.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -310,6 +331,33 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Thu Jul 30 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.9
+- Fix CVE-2026-15588: limit D-Bus auth line read length
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.8
+- Fix CVE-2026-58010: off-by-one in GVariant tuple offset checking
+- Resolves: RHEL-212157
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.7
+- Fix CVE-2026-58012: buffer overflow in gregex.c with G_REGEX_RAW
+- Resolves: RHEL-212217
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.6
+- Fix CVE-2026-58011: range validation in g_date_time_add_full()
+- Resolves: RHEL-212194
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.5
+- Fix CVE-2026-58013: buffer over-read in GIOChannel with long terminators
+- Resolves: RHEL-212236
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.4
+- Fix CVE-2026-58014: heap under-read in g_key_file_get_locale_string_list
+- Resolves: RHEL-190589
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.3
+- Fix CVE-2026-58015: validate D-Bus DBUS_COOKIE_SHA1 cookie context
+- Resolves: RHEL-212261
+
 * Thu Jul 09 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.2
 - Fix CVE-2026-58016: broken node element nesting validation in
   D-Bus introspection XML parsing
