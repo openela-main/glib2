@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 170%{?dist}
+Release: 177%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -172,6 +172,27 @@ Patch35: CVE-2025-14512.patch
 # https://github.com/GNOME/glib/commit/c9da977c178fbfc0e4caf99f9fdf5dc433d6fcc2
 Patch36: CVE-2026-58016.patch
 
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5171
+Patch37: CVE-2026-58014.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/8b72ad09c874ddff122b3e67b3470c5e2eab7690
+Patch38: CVE-2026-58015.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/9f557746c52ae2a62fd5929f532b77024a18abe2
+Patch39: CVE-2026-58013.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/49e067570dfa208c45d76f0b602664fd11a629ef
+Patch40: CVE-2026-58012.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5131
+Patch41: CVE-2026-58011.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/8338414f6560216efe67d3cbf549e32f8630252a
+Patch42: CVE-2026-58010.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5240
+Patch43: CVE-2026-15588.patch
+
 %description
 GLib is the low-level core library that forms the basis for projects
 such as GTK+ and GNOME. It provides data structure handling for C,
@@ -287,7 +308,8 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 
 %check
-make %{?_smp_mflags} check
+# One job at a time. The tests are not safe to run in parallel until 2.60. See: glib!505
+make check
 
 %files -f glib20.lang
 %license COPYING
@@ -372,6 +394,32 @@ make %{?_smp_mflags} check
 %{_datadir}/installed-tests
 
 %changelog
+* Thu Jul 30 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-177
+- Fix CVE-2026-15588: limit D-Bus auth line read length
+
+* Thu Jul 30 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-176
+- Fix CVE-2026-58010: off-by-one in GVariant tuple offset checking
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-175
+- Fix CVE-2026-58011: range validation in g_date_time_add_full()
+- Resolves: RHEL-212187
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-174
+- Fix CVE-2026-58012: buffer overflow in gregex case changing substitutions
+- Resolves: RHEL-212204
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-173
+- Fix CVE-2026-58013: buffer over-read in GIOChannel with long terminators
+- Resolves: RHEL-212229
+
+* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-172
+- Fix CVE-2026-58015: validate D-Bus DBUS_COOKIE_SHA1 cookie context
+- Resolves: RHEL-212254
+
+* Sun Jul 12 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-171
+- Fix one-byte heap under-read in g_key_file_get_locale_string_list()
+- Resolves: RHEL-190587
+
 * Thu Jul 09 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-170
 - Add patch for CVE-2026-58016
 - Resolves: RHEL-190622
