@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 19%{?dist}.9
+Release: 19%{?dist}.10
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -115,6 +115,9 @@ Patch:          CVE-2026-58010.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/commit/407349aa255a5c2b49caa52847aca1b8311c98b2
 Patch:          CVE-2026-15588.patch
+
+# https://gitlab.freedesktop.org/xdg/xdgmime/-/commit/1debecbfe5a643dd7bd1a70f40cf86b007edbd43
+Patch:          CVE-2026-16118.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -331,6 +334,9 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Mon Aug 31 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.10
+- Fix CVE-2026-16118: heap-buffer-overflow in xdgmimemagic.c
+
 * Thu Jul 30 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.9
 - Fix CVE-2026-15588: limit D-Bus auth line read length
 
