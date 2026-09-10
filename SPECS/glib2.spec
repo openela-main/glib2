@@ -5,7 +5,7 @@
 
 Name: glib2
 Version: 2.56.4
-Release: 177%{?dist}
+Release: 178%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -192,6 +192,9 @@ Patch42: CVE-2026-58010.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5240
 Patch43: CVE-2026-15588.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/ca75aff83af9875ea2ad2bfbe48a85dfd99c2ce5
+Patch44: CVE-2026-16118.patch
 
 %description
 GLib is the low-level core library that forms the basis for projects
@@ -394,6 +397,9 @@ make check
 %{_datadir}/installed-tests
 
 %changelog
+* Thu Sep 03 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-178
+- Fix CVE-2026-16118: heap-buffer-overflow in xdgmime magic parsing
+
 * Thu Jul 30 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.56.4-177
 - Fix CVE-2026-15588: limit D-Bus auth line read length
 
