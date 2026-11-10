@@ -1,4 +1,4 @@
-From ff90bb8474b1e724727f4014b446e7c851e609bd Mon Sep 17 00:00:00 2001
+From 4f8c85db9f6461ae44168863186fccb7e94e3542 Mon Sep 17 00:00:00 2001
 From: Colin Walters <walters@verbum.org>
 Date: Fri, 7 Jun 2019 18:44:43 +0000
 Subject: [PATCH 1/4] ghmac: Split off wrapper functions into ghmac-utils.c
@@ -296,9 +296,10 @@ index 8c18e6de4..329b8d197 100644
    'ghostutils.c',
    'giochannel.c',
 -- 
-2.31.1
+2.52.0
 
-From 5395d36e6685e0b7377794c59c5820970bb472ef Mon Sep 17 00:00:00 2001
+
+From 0de9f7dcf76bf75813b8aad134b2827620067a89 Mon Sep 17 00:00:00 2001
 From: Colin Walters <walters@verbum.org>
 Date: Fri, 7 Jun 2019 19:36:54 +0000
 Subject: [PATCH 2/4] Add a gnutls backend for GHmac
@@ -348,17 +349,30 @@ don't think this error should actually be hit in practice.
 
 https://gitlab.gnome.org/GNOME/glib/-/merge_requests/903
 ---
- glib/gchecksum.c        |   9 +-
- glib/gchecksumprivate.h |  32 +++++++
- glib/ghmac-gnutls.c     | 187 ++++++++++++++++++++++++++++++++++++++++
- glib/ghmac.c            |  15 ++++
- glib/meson.build        |  10 ++-
- meson.build             |   7 ++
- meson_options.txt       |   7 +-
- 7 files changed, 260 insertions(+), 7 deletions(-)
+ docs/reference/glib/meson.build |   1 +
+ glib/gchecksum.c                |   9 +-
+ glib/gchecksumprivate.h         |  32 ++++++
+ glib/ghmac-gnutls.c             | 187 ++++++++++++++++++++++++++++++++
+ glib/ghmac.c                    |  15 +++
+ glib/meson.build                |  10 +-
+ meson.build                     |   7 ++
+ meson_options.txt               |   5 +
+ 8 files changed, 260 insertions(+), 6 deletions(-)
  create mode 100644 glib/gchecksumprivate.h
  create mode 100644 glib/ghmac-gnutls.c
 
+diff --git a/docs/reference/glib/meson.build b/docs/reference/glib/meson.build
+index 43c273855..69fa14051 100644
+--- a/docs/reference/glib/meson.build
++++ b/docs/reference/glib/meson.build
+@@ -40,6 +40,7 @@ if get_option('gtk_doc')
+     'gutilsprivate.h',
+     'gvalgrind.h',
+     'dirent.h',
++    'gchecksumprivate.h'
+   ]
+ 
+   docpath = join_paths(glib_datadir, 'gtk-doc', 'html')
 diff --git a/glib/gchecksum.c b/glib/gchecksum.c
 index 29b479bc6..929958c3a 100644
 --- a/glib/gchecksum.c
@@ -701,7 +715,7 @@ index 329b8d197..2417de53d 100644
    objc_args : glib_c_args,
  )
 diff --git a/meson.build b/meson.build
-index e2eba1871..cca15f653 100644
+index a0223ce5b..5dfd587eb 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -2090,6 +2090,13 @@ if host_system == 'linux'
@@ -719,7 +733,7 @@ index e2eba1871..cca15f653 100644
    winsock2 = cc.find_library('ws2_32')
  endif
 diff --git a/meson_options.txt b/meson_options.txt
-index 072765361..c8f26ac02 100644
+index 072765361..0a672fd30 100644
 --- a/meson_options.txt
 +++ b/meson_options.txt
 @@ -39,6 +39,11 @@ option('internal_pcre',
@@ -735,9 +749,10 @@ index 072765361..c8f26ac02 100644
         type : 'boolean',
         value : false,
 -- 
-2.31.1
+2.52.0
 
-From 61c175277acb8d1e080305acd444201c5ad1fb81 Mon Sep 17 00:00:00 2001
+
+From 2cc560c8461068dee4ea01a19fcb608c0fd0bf1f Mon Sep 17 00:00:00 2001
 From: Michael Catanzaro <mcatanzaro@redhat.com>
 Date: Wed, 16 Jun 2021 20:35:00 -0500
 Subject: [PATCH 3/4] dlopen GnuTLS instead of linking directly
@@ -932,7 +947,7 @@ index 2417de53d..ba42951aa 100644
    objc_args : glib_c_args,
  )
 diff --git a/meson.build b/meson.build
-index cca15f653..404ef1790 100644
+index 5dfd587eb..a743f73a3 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -2090,11 +2090,9 @@ if host_system == 'linux'
@@ -950,9 +965,10 @@ index cca15f653..404ef1790 100644
  
  if host_system == 'windows'
 -- 
-2.31.1
+2.52.0
 
-From 7d1d96311b6ecd4f90ebbdd6fc58d28e06a86887 Mon Sep 17 00:00:00 2001
+
+From 8469fa31b16011d1decc75a1fef185c06e39fd5a Mon Sep 17 00:00:00 2001
 From: Michael Catanzaro <mcatanzaro@redhat.com>
 Date: Wed, 16 Jun 2021 20:46:24 -0500
 Subject: [PATCH 4/4] Add test for GHmac in FIPS mode
@@ -1083,4 +1099,5 @@ index 3ac3206df..2fa447984 100644
    return g_test_run ();
  }
 -- 
-2.31.1
+2.52.0
+

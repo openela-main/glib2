@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 19%{?dist}.10
+Release: 29%{?dist}
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -92,14 +92,17 @@ Patch:          CVE-2025-14087.patch
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4935
 Patch:          CVE-2025-14512.patch
 
-# https://github.com/GNOME/glib/commit/c9da977c178fbfc0e4caf99f9fdf5dc433d6fcc2
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5247
+Patch:          5247.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/c9da977c178fbfc0e4caf99f9fdf5dc433d6fcc2
 Patch:          CVE-2026-58016.patch
 
-# https://gitlab.gnome.org/GNOME/glib/-/commit/8b72ad09c874ddff122b3e67b3470c5e2eab7690
-Patch:          CVE-2026-58015.patch
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5132
+Patch:          CVE-2026-58012.patch
 
-# https://gitlab.gnome.org/GNOME/glib/-/commit/5f6d86b50bebf5458ab1becf4de2c5e5f066122b
-Patch:          CVE-2026-58014.patch
+# https://gitlab.gnome.org/GNOME/glib/-/commit/aa1cb87d56111ef989811e824f0ac77484cc997f
+Patch:          CVE-2026-58010.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/commit/9f557746c52ae2a62fd5929f532b77024a18abe2
 Patch:          CVE-2026-58013.patch
@@ -107,17 +110,14 @@ Patch:          CVE-2026-58013.patch
 # https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5131
 Patch:          CVE-2026-58011.patch
 
-# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5132
-Patch:          CVE-2026-58012.patch
-
-# https://gitlab.gnome.org/GNOME/glib/-/commit/8338414f6560216efe67d3cbf549e32f8630252a
-Patch:          CVE-2026-58010.patch
-
-# https://gitlab.gnome.org/GNOME/glib/-/commit/407349aa255a5c2b49caa52847aca1b8311c98b2
+# https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5240
 Patch:          CVE-2026-15588.patch
 
-# https://gitlab.freedesktop.org/xdg/xdgmime/-/commit/1debecbfe5a643dd7bd1a70f40cf86b007edbd43
-Patch:          CVE-2026-16118.patch
+# https://gitlab.gnome.org/GNOME/glib/-/commit/8b72ad09c874ddff122b3e67b3470c5e2eab7690
+Patch:          CVE-2026-58015.patch
+
+# https://gitlab.gnome.org/GNOME/glib/-/commit/5f6d86b50bebf5458ab1becf4de2c5e5f066122b
+Patch:          CVE-2026-58014.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -140,9 +140,15 @@ BuildRequires: pkgconfig(sysprof-capture-4)
 BuildRequires: pkgconfig(zlib)
 BuildRequires: python3-devel
 
+# Dependencies for tests
+BuildRequires:  shared-mime-info
+BuildRequires:  /usr/bin/dbus-daemon
+BuildRequires:  /usr/bin/update-desktop-database
+
 # For gnutls-hmac.patch. We now dlopen libgnutls.so.30 so that we can build a
 # static glib2 without depending on a static build of GnuTLS as well. This will
 # ensure we notice if the GnuTLS soname bumps, so that we can update our patch.
+BuildRequires: gnutls
 %if 0%{?__isa_bits} == 64
 Requires: libgnutls.so.30()(64bit)
 %else
@@ -334,43 +340,45 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
-* Mon Aug 31 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.10
-- Fix CVE-2026-16118: heap-buffer-overflow in xdgmimemagic.c
-
-* Thu Jul 30 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.9
-- Fix CVE-2026-15588: limit D-Bus auth line read length
-
-* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.8
-- Fix CVE-2026-58010: off-by-one in GVariant tuple offset checking
-- Resolves: RHEL-212157
-
-* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.7
-- Fix CVE-2026-58012: buffer overflow in gregex.c with G_REGEX_RAW
-- Resolves: RHEL-212217
-
-* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.6
-- Fix CVE-2026-58011: range validation in g_date_time_add_full()
-- Resolves: RHEL-212194
-
-* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.5
-- Fix CVE-2026-58013: buffer over-read in GIOChannel with long terminators
-- Resolves: RHEL-212236
-
-* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.4
+* Wed Aug 19 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-29
 - Fix CVE-2026-58014: heap under-read in g_key_file_get_locale_string_list
-- Resolves: RHEL-190589
+  Resolves: RHEL-190604
 
-* Mon Jul 20 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.3
+* Wed Aug 19 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-28
 - Fix CVE-2026-58015: validate D-Bus DBUS_COOKIE_SHA1 cookie context
-- Resolves: RHEL-212261
+  Resolves: RHEL-212262
 
-* Thu Jul 09 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-19.2
-- Fix CVE-2026-58016: broken node element nesting validation in
-  D-Bus introspection XML parsing
-- Resolves: RHEL-190632
+* Wed Aug 19 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-27
+- Fix CVE-2026-15588: limit D-Bus auth line read length
+  Resolves: RHEL-219128
 
-* Fri Apr 24 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-19.1
+* Wed Aug 19 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-26
+- Fix CVE-2026-58011: range validation in g_date_time_add_full()
+  Resolves: RHEL-212196
+
+* Wed Aug 19 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-25
+- Fix CVE-2026-58013: buffer over-read in GIOChannel with long terminators
+  Resolves: RHEL-212237
+
+* Wed Aug 19 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-24
+- Fix CVE-2026-58010: off-by-one error in GVariant tuple normal form checking
+  Resolves: RHEL-212171
+
+* Wed Aug 19 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-23
+- Fix CVE-2026-58012: case changing substitutions with G_REGEX_RAW
+  Resolves: RHEL-212218
+
+* Fri Jul 24 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-22
+- Fix CVE-2026-58016: XML parser state handling for <node> element nesting
+  Resolves: RHEL-190627
+
+* Mon Jul 14 2026 Joan Torres Lopez <joantolo@redhat.com> - 2.68.4-21
+- gdbusnameowning: Downgrade ReleaseName warning on closed connection to debug
+  Resolves: RHEL-14597
+
+* Fri Apr 24 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-20
 - Add patch for CVE-2025-14087 and CVE-2025-14512
+- Run testsuite during RPM check phase
 
 * Mon Jan 19 2026 Michael Catanzaro <mcatanzaro@redhat.com> - 2.68.4-19
 - Add patch for CVE-2025-13601
