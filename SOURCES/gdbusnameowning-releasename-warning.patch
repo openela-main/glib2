@@ -1,0 +1,50 @@
+From 23dbc305bd72cdab572b92cf55ba3375369f74ac Mon Sep 17 00:00:00 2001
+From: Joan Torres Lopez <joantolo@redhat.com>
+Date: Mon, 13 Jul 2026 21:46:02 +0200
+Subject: [PATCH] gdbusnameowning: Downgrade ReleaseName warning on closed
+ connection to debug
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+g_bus_unown_name() calls ReleaseName synchronously after checking that
+the connection is still open. However, the connection can close on the
+worker thread between the check and the call, which commonly happens
+during session shutdown when the bus daemon exits while clients are
+still running cleanup code.
+
+When this race occurs, the ReleaseName call fails with G_IO_ERROR_CLOSED
+and produces a spurious warning in the journal. Downgrade to g_debug
+since the name release is best-effort — the bus daemon is gone, so the
+name is already unowned.
+---
+ gio/gdbusnameowning.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/gio/gdbusnameowning.c b/gio/gdbusnameowning.c
+index c66e6813e..4f26cb09b 100644
+--- a/gio/gdbusnameowning.c
++++ b/gio/gdbusnameowning.c
+@@ -29,6 +29,7 @@
+ #include "gdbuserror.h"
+ #include "gdbusprivate.h"
+ #include "gdbusconnection.h"
++#include "gioerror.h"
+ 
+ #include "glibintl.h"
+ 
+@@ -942,7 +943,10 @@ g_bus_unown_name (guint owner_id)
+                                                 &error);
+           if (result == NULL)
+             {
+-              g_warning ("Error releasing name %s: %s", client->name, error->message);
++              if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CLOSED))
++                g_debug ("Error releasing name %s: %s", client->name, error->message);
++              else
++                g_warning ("Error releasing name %s: %s", client->name, error->message);
+               g_error_free (error);
+             }
+           else
+-- 
+2.51.0
+
