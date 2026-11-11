@@ -1,6 +1,6 @@
 Name: glib2
 Version: 2.68.4
-Release: 29%{?dist}
+Release: 29%{?dist}.1
 Summary: A library of handy utility functions
 
 License: LGPLv2+
@@ -118,6 +118,9 @@ Patch:          CVE-2026-58015.patch
 
 # https://gitlab.gnome.org/GNOME/glib/-/commit/5f6d86b50bebf5458ab1becf4de2c5e5f066122b
 Patch:          CVE-2026-58014.patch
+
+# https://gitlab.freedesktop.org/xdg/xdgmime/-/commit/1debecbfe5a643dd7bd1a70f40cf86b007edbd43
+Patch:          CVE-2026-16118.patch
 
 BuildRequires: chrpath
 BuildRequires: gcc
@@ -340,6 +343,10 @@ glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
 %{_datadir}/installed-tests
 
 %changelog
+* Tue Sep 01 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-29.1
+- Fix CVE-2026-16118: heap-buffer-overflow in xdgmime byte-swap routine
+  Resolves: RHEL-212281
+
 * Wed Aug 19 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.68.4-29
 - Fix CVE-2026-58014: heap under-read in g_key_file_get_locale_string_list
   Resolves: RHEL-190604
